@@ -30,6 +30,10 @@ namespace Jellyfin.Plugin.OriginalTitles.Search;
 /// discarded fallback).
 /// </para>
 /// <para>
+/// Users: a user with no settings entry (no enabled language) is declined by <see cref="CanSearch"/>, so a query from them costs no
+/// scan and no transliteration; a user with an entry but an empty list still scans (the language gate then matches nothing).
+/// </para>
+/// <para>
 /// Access, three layers: (1) SearchManager post-filters EVERY external result through the user's access filter when the query has a
 /// UserId (authoritative; it never runs without a UserId); (2) delegated SQL results are access-filtered by the SQL provider itself;
 /// (3) defence in depth here: a romanised hit is returned only if <see cref="ISearchItemAccess.GetVisibleItem"/> (server's
@@ -93,7 +97,8 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
     public int Priority => 50;
 
     /// <inheritdoc />
-    public bool CanSearch(SearchProviderQuery query) => query?.UserId is { } userId && userId != Guid.Empty;
+    public bool CanSearch(SearchProviderQuery query)
+        => query?.UserId is { } userId && userId != Guid.Empty && _settings.GetConfiguredUserIds().Contains(userId);
 
     /// <inheritdoc />
     public async IAsyncEnumerable<SearchResult> SearchAsync(
@@ -196,13 +201,16 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
     private List<Guid> RomanisedHits(SearchProviderQuery query, Guid userId)
     {
         var hits = new List<Guid>();
+
+        // Before the query is transliterated: the build's ICU warm-up must come first, or the very first query would run
+        // transliteration ahead of it (EnsureBuilt is a flag check once built).
+        _index.EnsureBuilt();
         var queryKeys = RomanisationKey.TransliteratedKeysOf(query.SearchTerm);
         if (queryKeys.Count == 0)
         {
             return hits;
         }
 
-        _index.EnsureBuilt();
         foreach (var entry in _index.Match(queryKeys, language => _settings.IsEnabled(userId, language)))
         {
             if (!TypeAllowed(entry.Kind, query))

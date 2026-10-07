@@ -195,6 +195,53 @@ public class OriginalTitlesSearchProviderTests
     }
 
     [Fact]
+    public async Task UserWithoutAnyEnabledLanguage_CannotSearch_NoScanNoLanguageGateCalls()
+    {
+        // UserNoLanguage has no settings entry: the provider declines up front, so the index is never scanned. A scan asks the
+        // language gate (IsEnabled) once per indexed entry; the fixture indexes exactly one item (A1), so a scan = 1 call.
+        // Presence companion: UserAr (entry "ar") does scan -> exactly 1 IsEnabled call and one hit, so a zero above is not an
+        // always-zero counter.
+        var f = new Fixture();
+        f.AddVisible(Movie(IdA1), UserAr, UserNoLanguage);
+
+        Assert.False(f.Provider.CanSearch(Query(UserNoLanguage)));
+        Assert.Empty(await f.Search(Query(UserNoLanguage)));
+        Assert.Equal(0, f.Settings.IsEnabledCalls);
+
+        Assert.True(f.Provider.CanSearch(Query(UserAr)));
+        Assert.Equal(new[] { (IdA1, Romanised) }, await f.Search(Query(UserAr)));
+        Assert.Equal(1, f.Settings.IsEnabledCalls);
+    }
+
+    [Fact]
+    public async Task EnsureBuilt_RunsBeforeTheQueryIsTransliterated_SoEvenAKeylessQueryRetriesTheBuild()
+    {
+        // The first query must not run transliteration ahead of the index build (the build's ICU warm-up would come too late for it).
+        // Observable order: a stopword-only query ("al": no keys) used to return before EnsureBuilt; now EnsureBuilt comes first.
+        // The library fails to list, so every EnsureBuilt call is one GetItemList attempt: the constructor's background build is
+        // attempt 1; the search's own EnsureBuilt is attempt 2. (Presence: the attempt is counted at all; absence of it would leave 1.)
+        var f = new Fixture();
+        f.Library.ThrowOnList = true;
+        f.AddVisible(Movie(IdA1), UserAr);
+        _ = f.Provider; // starts the background build (attempt 1)
+        await WaitUntil(() => f.Library.ListCalls >= 1);
+
+        Assert.Empty(await f.Search(Query(UserAr, "al")));
+
+        Assert.Equal(2, f.Library.ListCalls);
+    }
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition(), "condition not reached within 2 s");
+    }
+
+    [Fact]
     public async Task FailOpen_DelegateThrows_ReturnsNothing_NotAPartialRomanisedList()
     {
         // A romanised-only list would make the manager skip SQL and lose every plain match; nothing lets it fall back instead.
@@ -258,6 +305,28 @@ public class OriginalTitlesSearchProviderTests
             Limit = limit,
         };
 
+    /// <summary>Delegates to the real settings and counts the language-gate calls (<see cref="IUserLanguageSettings.IsEnabled"/>).</summary>
+    private sealed class CountingSettings : IUserLanguageSettings
+    {
+        private readonly IUserLanguageSettings _inner;
+        private int _isEnabledCalls;
+
+        public CountingSettings(IUserLanguageSettings inner)
+        {
+            _inner = inner;
+        }
+
+        public int IsEnabledCalls => Volatile.Read(ref _isEnabledCalls);
+
+        public bool IsEnabled(Guid userId, string? languageCode)
+        {
+            Interlocked.Increment(ref _isEnabledCalls);
+            return _inner.IsEnabled(userId, languageCode);
+        }
+
+        public IReadOnlyList<Guid> GetConfiguredUserIds() => _inner.GetConfiguredUserIds();
+    }
+
     private sealed class Fixture
     {
         private readonly SearchLibraryManager _library;
@@ -273,7 +342,8 @@ public class OriginalTitlesSearchProviderTests
             var config = new PluginConfiguration();
             config.Users.Add(new UserLanguageEntry { UserId = UserAr, Languages = { "ar" } });
             config.Users.Add(new UserLanguageEntry { UserId = UserHidden, Languages = { "ar" } });
-            var settings = new UserLanguageSettings(() => config);
+            var settings = new CountingSettings(new UserLanguageSettings(() => config));
+            Settings = settings;
 
             var searchManager = new FakeSearchManager();
             searchManager.Providers.Add(Sql);
@@ -284,6 +354,10 @@ public class OriginalTitlesSearchProviderTests
         }
 
         public FakeInternalProvider Sql { get; } = new();
+
+        public CountingSettings Settings { get; }
+
+        public SearchLibraryManager Library => _library;
 
         public FakeItemAccess Access { get; } = new();
 

@@ -209,7 +209,11 @@ public sealed class TitleIndex : IDisposable
     /// <summary>
     /// Brings ICU past its first-call race before the bulk build (R9): RomanisationKey's lock serialises only the plugin's own calls,
     /// while the server calls <c>Transliterated()</c> unlocked (sort names during scans, SQL search on non-Latin queries) at the same
-    /// startup moment. The race was measured as first-call only, so one correct probe result makes the rest of the build safe.
+    /// startup moment. The race was measured as first-call only (with Arabic input), so one correct probe result is assumed to make the
+    /// rest of the build safe.
+    /// Known limitation, not a guarantee: the probe is Arabic only. ICU4N's AnyTransliterator is understood (not measured here) to cache one sub-transliterator per
+    /// script code, so the first-call race may exist per script (Cyrillic, Greek, ...), and a title in a script the probe never touched
+    /// can still be hit by it; the non-ASCII-key tripwire in <c>EntryFor</c> logs that case once, it does not prevent it.
     /// Not covered: a unit test cannot provoke the race; only a racing-thread probe or the live harness can show it.
     /// </summary>
     private void WarmUpTransliterator()
