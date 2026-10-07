@@ -1,6 +1,7 @@
 using System;
 using Jellyfin.Plugin.OriginalTitles.Configuration;
 using Jellyfin.Plugin.OriginalTitles.Display;
+using Jellyfin.Plugin.OriginalTitles.Search;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Plugins;
@@ -29,7 +30,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<DisplayNameResolver>();
         DecorateDtoService(serviceCollection);
 
-        // Later tasks register the search provider here.
+        // Search provider dependencies (library event relay, title index, ISearchProvider). Mandatory: without them the provider
+        // cannot be constructed.
+        serviceCollection.AddOriginalTitlesSearch();
     }
 
     /// <summary>
