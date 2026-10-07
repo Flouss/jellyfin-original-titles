@@ -95,6 +95,34 @@ public class UserLanguageSettingsTests
     }
 
     [Fact]
+    public void IsEnabled_ThrowingProvider_IsFalse_NotAnException_WhileWorkingProviderIsTrue()
+    {
+        // The provider wraps Plugin.Instance.Configuration at runtime; if reading it throws, nothing is enabled.
+        var throwing = new UserLanguageSettings(() => throw new InvalidOperationException("config unavailable"));
+        Assert.False(throwing.IsEnabled(Alice, "ar"));
+
+        Assert.True(Build((Alice, new[] { "ar" })).IsEnabled(Alice, "ar"));
+    }
+
+    [Fact]
+    public void IsEnabled_NullConfigNullUsersOrNullEntry_IsFalse_WhileValidSiblingEntryIsTrue()
+    {
+        // A null configuration, a null Users list, or a null entry inside Users (possible after XML deserialisation of a
+        // hand-edited file) must read as "nothing enabled" for that part, never throw. Bob's valid ["ar"] entry after
+        // the null entry still answers true (presence companion).
+        Assert.False(new UserLanguageSettings(() => null!).IsEnabled(Alice, "ar"));
+        Assert.False(new UserLanguageSettings(() => new PluginConfiguration { Users = null! }).IsEnabled(Alice, "ar"));
+
+        var config = new PluginConfiguration();
+        config.Users.Add(null!);
+        config.Users.Add(new UserLanguageEntry { UserId = Bob, Languages = new List<string> { "ar" } });
+        var settings = new UserLanguageSettings(() => config);
+
+        Assert.False(settings.IsEnabled(Alice, "ar"));
+        Assert.True(settings.IsEnabled(Bob, "ar"));
+    }
+
+    [Fact]
     public void Configuration_XmlRoundTrip_PreservesTwoUsersWithDifferentLists()
     {
         var original = new PluginConfiguration();

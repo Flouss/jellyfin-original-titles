@@ -27,9 +27,27 @@ public class UserLanguageSettings : IUserLanguageSettings
             return false;
         }
 
-        foreach (var entry in _configProvider().Users)
+        PluginConfiguration? config;
+        try
         {
-            if (entry.UserId != userId || entry.Languages is null)
+            config = _configProvider();
+        }
+#pragma warning disable CA1031 // An unreadable configuration means nothing is enabled; never break the caller.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            return false;
+        }
+
+        var users = config?.Users;
+        if (users is null)
+        {
+            return false;
+        }
+
+        foreach (var entry in users)
+        {
+            if (entry is null || entry.UserId != userId || entry.Languages is null)
             {
                 continue;
             }
