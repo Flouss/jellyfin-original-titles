@@ -41,20 +41,25 @@ Caveats:
 The metadata editor shows the wrapper's output, and `POST /Items/{id}` (v12.2 `ItemUpdateController.UpdateItem`) copies the posted `Name`
 into the item, cascades a series' `Name` into every season and episode `SeriesName`, and copies a posted episode/season `SeriesName`. Saving a
 displayed item unchanged would therefore store the original title (reproduced on the harness). The editor guard (`Guard/EditorGuardFilter.cs`,
-a global MVC action filter) runs **before** that action: when the posted `Name` (movie, series) or `SeriesName` (episode, season) equals what
-the plugin shows **any** configured user for that item, it puts the stored value back into the request. The controller's own write then keeps
-the real name. The guard itself never writes anything, so it cannot loop. Each kept value is logged at Information
-(`editor guard kept the stored ...`).
+a global MVC action filter) runs **before** that action: when the posted `Name` (movie, series) or `SeriesName` (episode, season) is exactly
+what the plugin shows the **saving user** for that item, it puts the stored value back into the request. A request made with an API key has no
+user, so then it compares with what **any** configured user is shown. One exception: when the save also sets `OriginalTitle` to the stored
+`Name` (an explicit swap, or the repair of an item stored swapped), the posted `Name` is kept, because restoring would store the same title in
+both fields. The controller's own write then keeps the real name. The guard itself never writes anything, so it cannot loop. An episode's or
+season's own `Name` is never touched. Each kept value is logged at Information (`editor guard kept the stored ...`).
 
 It does **not** cover:
 
 - edits made while the plugin is disabled or uninstalled;
 - writers that bypass `POST /Items/{id}` (direct DB edits, scripts or plugins that persist items themselves, metadata refreshes);
-- items already stored swapped (stored `Name` equals the original title: nothing is displayed differently, nothing to restore);
-- items whose translated `Name` legitimately equals the original title;
-- **a false positive**: an admin who deliberately sets `Name` (or `SeriesName`) to the original title while any user has that language
-  enabled is reverted, because that request looks exactly like the accidental save. To store it on purpose, remove the language from every
-  user's list first, save, then add it back;
+- items whose stored `Name` equals the `OriginalTitle` (nothing is displayed differently, nothing to restore), including items whose
+  translated `Name` legitimately equals the original title;
+- items stored **truly swapped** (`Name` holds the original, `OriginalTitle` the translated title): an unchanged save keeps them swapped,
+  and repairing them works only by also swapping `OriginalTitle` back in the same save (the exception above). The guard neither causes nor
+  repairs the swap;
+- **a false positive**: a user who has the language enabled and deliberately types the original title they are shown into `Name` (or
+  `SeriesName`), without swapping `OriginalTitle`, is reverted, because that request looks exactly like the accidental save. With an API key
+  this applies when any configured user has the language. To store it on purpose, save from a user without that language;
 - a Jellyfin upgrade that renames the controller or action (the guard then silently stops matching). A renamed `itemId`/`request` argument
   is detected and logged as an Error on every save. Re-run the harness check after each Jellyfin upgrade.
 

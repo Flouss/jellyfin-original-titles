@@ -7,7 +7,8 @@
   then posts the items harness-admin sees (wrapper on: Arabic titles) back through POST /Items/{id} UNCHANGED, with the API key
   and with an admin session token, and reads the stored values back through the control user (empty language list, so the
   wrapper never rewrites what it sees). Covers movie Name, series Name (and the controller's cascade into season/episode
-  SeriesName), episode and season SeriesName, and a genuine rename (kept). Resets the fixture titles after each case.
+  SeriesName), episode and season SeriesName, a genuine rename (kept), a deliberate swap of Name and OriginalTitle (kept) and the
+  repair of that swapped item (kept as posted). Resets the fixture titles after each case.
   -Expect guard (default): the translated titles must stay. -Expect bug: what Jellyfin does WITHOUT the guard (build the plugin
   without Guard/EditorGuardFilter registered): the original title is stored. Prints PASS/FAIL per check and FAILS=<n>.
   Uses the credentials in .env.local (written by seed.ps1, never printed). Talks only to the loopback harness.
@@ -98,7 +99,7 @@ function PostBack([string]$id, [string]$viewAs, [string]$token, [hashtable]$chan
 }
 function Stored([string]$id) { Jf GET "/Users/$ctl/Items/$id" }
 function Reset() {
-    PostBack $ids.Movie $ctl $cfg.API_KEY @{ Name = $movieReal } | Out-Null
+    PostBack $ids.Movie $ctl $cfg.API_KEY @{ Name = $movieReal; OriginalTitle = $movieOriginal } | Out-Null
     PostBack $ids.Series $ctl $cfg.API_KEY @{ Name = $seriesReal } | Out-Null   # cascades SeriesName to season + episodes
     foreach ($e in $ids.Episodes) { PostBack $e $ctl $cfg.API_KEY @{ SeriesName = $seriesReal } | Out-Null }
 }
@@ -153,6 +154,20 @@ Reset
 '--- F: season posted back unchanged (API key)'
 PostBack $ids.Season $admin $cfg.API_KEY | Out-Null
 Check 'F stored season SeriesName' (Stored $ids.Season).SeriesName $sv
+Reset
+
+'--- G: deliberate swap (API key): Name = original AND OriginalTitle = translated in one save -> kept as posted'
+PostBack $ids.Movie $ctl $cfg.API_KEY @{ Name = $movieOriginal; OriginalTitle = $movieReal } | Out-Null
+$st = Stored $ids.Movie
+Check 'G stored Name' $st.Name $movieOriginal
+Check 'G stored OriginalTitle' $st.OriginalTitle $movieReal
+
+'--- H: repair of that truly swapped item (session): Name left as shown, OriginalTitle set back to the original -> repaired'
+Check 'H admin is shown' (Jf GET "/Users/$admin/Items/$($ids.Movie)").Name $movieReal
+PostBack $ids.Movie $admin $sessionToken @{ OriginalTitle = $movieOriginal } | Out-Null
+$st = Stored $ids.Movie
+Check 'H stored Name' $st.Name $movieReal
+Check 'H stored OriginalTitle' $st.OriginalTitle $movieOriginal
 Reset
 
 '--- after reset'

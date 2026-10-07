@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Security.Claims;
 using Jellyfin.Plugin.OriginalTitles.Api;
 using Jellyfin.Plugin.OriginalTitles.Configuration;
 using Jellyfin.Plugin.OriginalTitles.Display;
@@ -165,26 +166,136 @@ public sealed class EditorGuardFilterTests : IDisposable
     {
         // Episode/Season of the Arabic series: the wrapper shows SeriesName = SeriesOriginal (series-side decision, ruling R6) and never
         // touches their own Name. The controller copies a non-null request.SeriesName into the item (v12.2 ~286-288), so a posted-back
-        // SeriesOriginal is replaced by the stored SeriesName ("Khottab Al Bab"); their own Name stays as posted.
+        // SeriesOriginal is replaced by the stored SeriesName ("Khottab Al Bab"); their own Name stays as posted. The own Names are posted
+        // EDITED ("... (Director's Cut)", "... (Remastered)", both differ from the stored EpisodeName/SeasonName), so an implementation that
+        // also wrote the stored own Name back would turn them into "Episode One"/"Season 1" and fail.
         var series = ArabicSeries();
         var episode = new Episode { Id = Guid.NewGuid(), Name = EpisodeName, SeriesId = series.Id, SeriesName = SeriesName };
         var season = new Season { Id = Guid.NewGuid(), Name = SeasonName, SeriesId = series.Id, SeriesName = SeriesName };
         var filter = Build(out _, out _, series, episode, season);
 
-        var episodeRequest = new BaseItemDto { Name = EpisodeName, SeriesName = SeriesOriginal };
+        var episodeRequest = new BaseItemDto { Name = EpisodeName + " (Director's Cut)", SeriesName = SeriesOriginal };
         Run(filter, episode.Id, episodeRequest);
         Assert.Equal(SeriesName, episodeRequest.SeriesName);
-        Assert.Equal(EpisodeName, episodeRequest.Name);
+        Assert.Equal("Episode One (Director's Cut)", episodeRequest.Name);
 
-        var seasonRequest = new BaseItemDto { Name = SeasonName, SeriesName = SeriesOriginal };
+        var seasonRequest = new BaseItemDto { Name = SeasonName + " (Remastered)", SeriesName = SeriesOriginal };
         Run(filter, season.Id, seasonRequest);
         Assert.Equal(SeriesName, seasonRequest.SeriesName);
-        Assert.Equal(SeasonName, seasonRequest.Name);
+        Assert.Equal("Season 1 (Remastered)", seasonRequest.Name);
 
         // Companion: a SeriesName nobody is shown ("Another Show") is a real edit and is kept.
         var edited = new BaseItemDto { Name = EpisodeName, SeriesName = "Another Show" };
         Run(filter, episode.Id, edited);
         Assert.Equal("Another Show", edited.SeriesName);
+    }
+
+    [Fact]
+    public void RepairOfATrulySwappedItem_PostedOriginalTitleEqualsStoredName_IsKeptAsPosted()
+    {
+        // Stored TRULY swapped: Name = MovieOriginal (Arabic), OriginalTitle = MovieName (Latin), "ar". ArabicUser is shown
+        // OriginalTitle = MovieName (non-blank, != Name, enabled). The admin repairs it: leaves Name as shown (MovieName) and sets
+        // OriginalTitle = MovieOriginal. Restoring Name would give Name = OriginalTitle = MovieOriginal (the Latin title lost). The posted
+        // OriginalTitle equals the stored Name -> explicit swap signal -> the request is kept: Name MovieName, OriginalTitle MovieOriginal.
+        var swapped = new Movie { Id = Guid.NewGuid(), Name = MovieOriginal, OriginalTitle = MovieName, OriginalLanguage = "ar" };
+        var filter = Build(out _, out var log, swapped);
+        var request = new BaseItemDto { Name = MovieName, OriginalTitle = MovieOriginal, OriginalLanguage = "ar" };
+
+        Run(filter, swapped.Id, request);
+
+        Assert.Equal(MovieName, request.Name);
+        Assert.Equal(MovieOriginal, request.OriginalTitle);
+        Assert.DoesNotContain(log.Entries, e => e.Level == LogLevel.Information);
+
+        // Companion: posting the same swapped item back unchanged (OriginalTitle still MovieName, != stored Name MovieOriginal) is the
+        // accidental save and keeps the stored Name MovieOriginal.
+        var unchanged = new BaseItemDto { Name = MovieName, OriginalTitle = MovieName };
+        Run(filter, swapped.Id, unchanged);
+        Assert.Equal(MovieOriginal, unchanged.Name);
+    }
+
+    [Fact]
+    public void DeliberateSwapOfANormalItem_IsKeptAsPosted_WhileAnOriginalTitleTypoFixIsStillGuarded()
+    {
+        // Stored MovieName / MovieOriginal ("ar"). The admin swaps on purpose: Name = MovieOriginal (as shown), OriginalTitle = MovieName.
+        // Restoring would give Name = OriginalTitle = MovieName (the Arabic title lost). Posted OriginalTitle == stored Name -> kept.
+        var movie = ArabicMovie();
+        var filter = Build(out _, out _, movie);
+        var swap = new BaseItemDto { Name = MovieOriginal, OriginalTitle = MovieName };
+
+        Run(filter, movie.Id, swap);
+
+        Assert.Equal(MovieOriginal, swap.Name);
+        Assert.Equal(MovieName, swap.OriginalTitle);
+
+        // Companion: an OriginalTitle typo fix (last letter U+064A -> U+0649) with the displayed Name left as shown is still the
+        // accidental case: the posted OriginalTitle differs from the stored Name, so Name goes back to MovieName and the fix is kept.
+        const string FixedOriginal = "موش في ثنيتى";
+        var typoFix = new BaseItemDto { Name = MovieOriginal, OriginalTitle = FixedOriginal };
+        Run(filter, movie.Id, typoFix);
+        Assert.Equal(MovieName, typoFix.Name);
+        Assert.Equal(FixedOriginal, typoFix.OriginalTitle);
+    }
+
+    [Fact]
+    public void SessionUser_ComparesAgainstThatUsersViewOnly()
+    {
+        // A session (the web editor) carries the Jellyfin-UserId claim (v12.2 CustomAuthenticationHandler); the guard compares with
+        // what THAT user is shown. Arabic movie, "ar" enabled for ArabicUser only.
+        var movie = ArabicMovie();
+        var filter = Build(out _, out _, movie);
+
+        // (a) ArabicUser is shown MovieOriginal and posts it back -> restored to MovieName.
+        var shown = new BaseItemDto { Name = MovieOriginal };
+        Run(filter, movie.Id, shown, Session(ArabicUser));
+        Assert.Equal(MovieName, shown.Name);
+
+        // (b) FrenchUser ("fr" only) is shown MovieName; typing MovieOriginal is deliberate -> kept, although ArabicUser would see it.
+        var deliberate = new BaseItemDto { Name = MovieOriginal };
+        Run(filter, movie.Id, deliberate, Session(FrenchUser));
+        Assert.Equal(MovieOriginal, deliberate.Name);
+
+        // (b2) A user with no settings entry at all -> also kept.
+        var stranger = new BaseItemDto { Name = MovieOriginal };
+        Run(filter, movie.Id, stranger, Session(Guid.Parse("33333333-3333-3333-3333-333333333333")));
+        Assert.Equal(MovieOriginal, stranger.Name);
+    }
+
+    [Fact]
+    public void ApiKeyRequestWithoutUser_FallsBackToAnyConfiguredUser()
+    {
+        // An API key has no user: core still adds Jellyfin-UserId = Guid.Empty.ToString("N") (AuthorizationInfo.UserId => User?.Id ??
+        // Guid.Empty). Then "shown to any configured user" applies: ArabicUser is shown MovieOriginal -> restored to MovieName.
+        var movie = ArabicMovie();
+        var filter = Build(out _, out _, movie);
+
+        var apiKey = new BaseItemDto { Name = MovieOriginal };
+        Run(filter, movie.Id, apiKey, Session(Guid.Empty));
+        Assert.Equal(MovieName, apiKey.Name);
+
+        // Same with no claim at all.
+        var noClaim = new BaseItemDto { Name = MovieOriginal };
+        Run(filter, movie.Id, noClaim, new ClaimsPrincipal(new ClaimsIdentity()));
+        Assert.Equal(MovieName, noClaim.Name);
+    }
+
+    [Fact]
+    public void CaseOnlyVariantOfTheDisplayedOriginal_IsAGenuineEdit()
+    {
+        // French movie ("fr" for FrenchUser): displayed FrenchOriginal. Its upper-case variant is not what anybody was shown (the
+        // comparison is ordinal) -> kept as posted.
+        var french = new Movie { Id = Guid.NewGuid(), Name = FrenchName, OriginalTitle = FrenchOriginal, OriginalLanguage = "fr" };
+        var filter = Build(out _, out _, french);
+        var request = new BaseItemDto { Name = "LE FABULEUX DESTIN D'AMELIE POULAIN" };
+
+        Run(filter, french.Id, request);
+
+        Assert.Equal("LE FABULEUX DESTIN D'AMELIE POULAIN", request.Name);
+
+        // Companion: the exact displayed value is reverted to FrenchName.
+        var exact = new BaseItemDto { Name = FrenchOriginal };
+        Run(filter, french.Id, exact);
+        Assert.Equal(FrenchName, exact.Name);
     }
 
     [Fact]
@@ -341,15 +452,23 @@ public sealed class EditorGuardFilterTests : IDisposable
         => new() { ControllerName = controller, ActionName = action };
 
     private static void Run(EditorGuardFilter filter, Guid itemId, BaseItemDto request, ActionDescriptor? descriptor = null)
+        => Run(filter, itemId, request, new ClaimsPrincipal(new ClaimsIdentity()), descriptor);
+
+    private static void Run(EditorGuardFilter filter, Guid itemId, BaseItemDto request, ClaimsPrincipal user, ActionDescriptor? descriptor = null)
     {
         // Shape of ItemUpdateController.UpdateItem([FromRoute] Guid itemId, [FromBody] BaseItemDto request) (v12.2 line 75).
         var arguments = new Dictionary<string, object?> { ["itemId"] = itemId, ["request"] = request };
-        filter.OnActionExecuting(Context(descriptor ?? Descriptor("ItemUpdate", "UpdateItem"), arguments));
+        filter.OnActionExecuting(Context(descriptor ?? Descriptor("ItemUpdate", "UpdateItem"), arguments, user));
     }
 
-    private static ActionExecutingContext Context(ActionDescriptor descriptor, IDictionary<string, object?> arguments)
+    // The claim core's CustomAuthenticationHandler adds (v12.2): InternalClaimTypes.UserId = userId.ToString("N").
+    private static ClaimsPrincipal Session(Guid userId)
+        => new(new ClaimsIdentity(new[] { new Claim("Jellyfin-UserId", userId.ToString("N")) }, "CustomAuthentication"));
+
+    private static ActionExecutingContext Context(ActionDescriptor descriptor, IDictionary<string, object?> arguments, ClaimsPrincipal? user = null)
     {
-        var actionContext = new ActionContext(new DefaultHttpContext(), new RouteData(), descriptor);
+        var actionContext = new ActionContext(
+            new DefaultHttpContext { User = user ?? new ClaimsPrincipal(new ClaimsIdentity()) }, new RouteData(), descriptor);
         return new ActionExecutingContext(actionContext, new List<IFilterMetadata>(), arguments, controller: new object());
     }
 
