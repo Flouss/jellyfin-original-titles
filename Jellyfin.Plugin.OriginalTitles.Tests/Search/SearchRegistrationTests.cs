@@ -34,6 +34,27 @@ public class SearchRegistrationTests
     }
 
     [Fact]
+    public void RealRegistrator_ProvidesBothServiceFilters_AsSingletons_ThatResolveWithAValidatedGraph()
+    {
+        // MVC resolves a filter added through Filters.AddService from the container on every request; a missing registration or an
+        // unresolvable constructor dependency would fail EVERY MVC action, not just the filtered one. ValidateScopes/ValidateOnBuild
+        // make the container check the whole registered graph up front. Same core stand-ins as the test above.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(SearchLibraryManager.Create().Manager);
+        services.AddSingleton(SearchUserManager.Create().Manager);
+        services.AddSingleton<ISearchManager>(new FakeSearchManager());
+
+        new PluginServiceRegistrator().RegisterServices(services, null!);
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
+
+        // Presence: both filters resolve, and resolving twice yields the same instance (singleton, so state is per process).
+        Assert.Same(provider.GetRequiredService<OriginalTitles.Api.SearchHintsFilter>(), provider.GetRequiredService<OriginalTitles.Api.SearchHintsFilter>());
+        Assert.Same(provider.GetRequiredService<OriginalTitles.Guard.EditorGuardFilter>(), provider.GetRequiredService<OriginalTitles.Guard.EditorGuardFilter>());
+    }
+
+    [Fact]
     public void CoreServicesPlusTheExtension_CanCreateTheProviderTheWayTheTypeScanDoes()
     {
         var services = new ServiceCollection();
