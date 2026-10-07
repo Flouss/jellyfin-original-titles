@@ -181,6 +181,37 @@ public class OriginalTitlesSearchProviderTests
         Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr)));
     }
 
+    [Theory]
+    [InlineData("la")]
+    [InlineData("le")]
+    [InlineData("ba")]
+    [InlineData("bab")]
+    [InlineData("la ba")]
+    public async Task QueryWhoseKeysAreAllShorterThanThree_IsNotRomanised_AndDoesNotDelegate(string term)
+    {
+        // Short keys are exact-match only (TitleMatcher), and a romanised hit scores 90, above SQL's prefix tiers (80/75): a short query
+        // like "la" would otherwise return every title with a word keyed "l", ranked above genuine prefix matches. So when EVERY query key
+        // has fewer than 3 characters the provider does nothing and the manager's own SQL results stand.
+        // Keys by hand (RomanisationKey rules: lowercase, no article, digraphs, drop a/e/i/o/u, collapse doubles):
+        //   la -> drop a -> "l"      le -> drop e -> "l"      ba -> drop a -> "b"      bab -> drop a -> "bb" -> collapse -> "b"
+        //   "la ba" -> ["l", "b"]    all lengths 1 < 3
+        // The fixture title الخطاب على الباب has keys [xtb, l, b], so WITHOUT the guard each of these equals a title key and matches.
+        var f = new Fixture();
+        f.AddVisible(Movie(IdA1), UserAr);
+        f.Sql.Results.Add(new SearchResult(IdB, 50f));
+
+        Assert.Empty(await f.Search(Query(UserAr, term)));
+        Assert.Empty(f.Sql.Queries);
+
+        // Presence companions on the same fixture: a query with at least one 3+ character key still matches (and delegates).
+        //   khottab           -> kh to x, drop o,a, collapse tt: "xtb"                    (one key, 3 characters)
+        //   khottab al beb    -> [xtb, b]  (al is a stopword; beb -> drop e -> "bb" -> "b"): xtb has 3 characters
+        //   la khottab        -> [l, xtb]  both are title keys                           (a short key riding with a long one)
+        Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr, "khottab")));
+        Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr)));
+        Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr, "la khottab")));
+    }
+
     [Fact]
     public async Task NoUser_CannotSearch_AndAddsNothing()
     {

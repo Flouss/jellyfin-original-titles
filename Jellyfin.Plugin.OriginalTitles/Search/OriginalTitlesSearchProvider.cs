@@ -44,6 +44,8 @@ namespace Jellyfin.Plugin.OriginalTitles.Search;
 /// Fail open = "as if the plugin were absent": any failure yields NO results (never a romanised-only list, which would make the
 /// manager drop every plain SQL match) and is logged once at warning level, later ones at debug.
 /// </para>
+/// Short queries: when every query key is shorter than 3 characters the romanised path is skipped (no hit, nothing delegated), because
+/// short keys match only equal short keys and a romanised hit (90) would outrank SQL's genuine prefix matches (ruling R15).
 /// Priority: 50. The manager runs all applicable providers concurrently and merges by best score per item, so priority only orders
 /// the provider list (logs, <c>GetProviders</c>); 50 sits between Meilisearch (10) and the SQL provider (100).
 /// Score: romanised hits score 90, below SQL's exact CleanName match (100) and above its prefix tiers (80/75) and contains (50);
@@ -53,6 +55,9 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
 {
     /// <summary>The score of a romanised hit.</summary>
     public const float RomanisedMatchScore = 90f;
+
+    /// <summary>The romanised path runs only when at least one query key has this many characters (ruling R15).</summary>
+    private const int MinRomanisedQueryKeyLength = 3;
 
     /// <summary>The manager's own default when the query has no limit (SearchManager v12.2 CollectFromProvidersAsync).</summary>
     private const int DefaultLimit = 100;
@@ -228,6 +233,14 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
         _index.EnsureBuilt();
         var queryKeys = RomanisationKey.TransliteratedKeysOf(query.SearchTerm);
         if (queryKeys.Count == 0)
+        {
+            return hits;
+        }
+
+        // Short keys are exact-match only (TitleMatcher) and a romanised hit outscores SQL's prefix tiers: a query whose keys are ALL
+        // shorter than this ("la", "mo") would list every title with such a word above its genuine prefix matches. Decided here, not in
+        // TitleMatcher/RomanisationKey, so their unit semantics (a short key still matches an equal short key) stay intact.
+        if (!queryKeys.Any(key => key.Length >= MinRomanisedQueryKeyLength))
         {
             return hits;
         }
