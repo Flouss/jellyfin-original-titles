@@ -181,6 +181,26 @@ public sealed class SearchHintsFilterTests : IDisposable
     }
 
     [Fact]
+    public async Task UserWithoutAnyEnabledLanguage_SkipsTheHintLoop_NoItemLookupAtAll()
+    {
+        // NoEntryUser (33333333-...) has no settings entry, so nothing is enabled for them: the filter must not even look the items up
+        // (each lookup is a DB read when core's cache is cold). Hints stay exactly as the controller built them.
+        // Presence companion: ArabicUser ("ar") on the same hints is rewritten, and then GetItemById IS called, once per qualifying
+        // hint (here the single Movie hint -> 1 call), so the zero above is not an always-zero fake.
+        var noEntryUser = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var arabic = ArabicMovie();
+        var filter = Build(out _, out var library, arabic);
+
+        var untouched = await RunAsync(filter, noEntryUser, Hint(arabic, MovieName));
+        Assert.Equal(MovieName, untouched.SearchHints[0].Name);
+        Assert.Equal(0, FakeLibraryManager.GetItemByIdCalls(library));
+
+        var rewritten = await RunAsync(filter, ArabicUser, Hint(arabic, MovieName));
+        Assert.Equal(MovieOriginal, rewritten.SearchHints[0].Name);
+        Assert.Equal(1, FakeLibraryManager.GetItemByIdCalls(library));
+    }
+
+    [Fact]
     public async Task FailOpen_ThrowingHintStaysUnchanged_OthersRewritten()
     {
         var arabic = ArabicMovie();
@@ -268,7 +288,9 @@ public sealed class SearchHintsFilterTests : IDisposable
     private static SearchHint Hint(BaseItem item, string name, string? series = null)
         => new() { Id = item.Id, Name = name, Type = item.GetBaseItemKind(), Series = series };
 
-    private static SearchHintsFilter Build(out CapturingLogger log, params BaseItem[] items)
+    private static SearchHintsFilter Build(out CapturingLogger log, params BaseItem[] items) => Build(out log, out _, items);
+
+    private static SearchHintsFilter Build(out CapturingLogger log, out ILibraryManager library, params BaseItem[] items)
     {
         var config = new PluginConfiguration();
         config.Users.Add(new UserLanguageEntry { UserId = ArabicUser, Languages = new List<string> { "ar" } });
@@ -278,8 +300,9 @@ public sealed class SearchHintsFilterTests : IDisposable
         config.Users.Add(new UserLanguageEntry { UserId = Guid.Empty, Languages = new List<string> { "ar" } });
 
         log = new CapturingLogger();
-        ILibraryManager library = FakeLibraryManager.Create(items);
-        return new SearchHintsFilter(new DisplayNameResolver(new UserLanguageSettings(() => config)), library, log);
+        library = FakeLibraryManager.Create(items);
+        var settings = new UserLanguageSettings(() => config);
+        return new SearchHintsFilter(new DisplayNameResolver(settings), settings, library, log);
     }
 
     private static Task<SearchHintResult> RunAsync(SearchHintsFilter filter, Guid userIdArgument, params SearchHint[] hints)

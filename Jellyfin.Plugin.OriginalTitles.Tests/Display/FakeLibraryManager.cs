@@ -25,6 +25,13 @@ public class FakeLibraryManager : DispatchProxy
 {
     private readonly Dictionary<Guid, BaseItem> _items = new();
 
+    /// <summary>Gets how many times <c>GetItemById(Guid)</c> was called on the proxy <paramref name="library"/>.</summary>
+    /// <param name="library">A proxy made by <see cref="Create"/>.</param>
+    /// <returns>The call count.</returns>
+    public static int GetItemByIdCalls(ILibraryManager library) => ((FakeLibraryManager)(object)library)._getItemByIdCalls;
+
+    private int _getItemByIdCalls;
+
     /// <summary>Creates the fake backed by the given items.</summary>
     /// <param name="items">Items resolvable by id.</param>
     /// <returns>The proxy to assign to <see cref="BaseItem.LibraryManager"/>.</returns>
@@ -46,6 +53,7 @@ public class FakeLibraryManager : DispatchProxy
         if (targetMethod is { Name: "GetItemById", IsGenericMethod: false }
             && args is { Length: 1 } && args[0] is Guid id)
         {
+            _getItemByIdCalls++;
             return _items.TryGetValue(id, out var item) ? item : null;
         }
 

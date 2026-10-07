@@ -4,6 +4,7 @@ using System.Linq;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.OriginalTitles.Configuration;
 using Jellyfin.Plugin.OriginalTitles.Display;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Search;
@@ -28,8 +29,13 @@ namespace Jellyfin.Plugin.OriginalTitles.Api;
 /// <c>userId</c>) is never rewritten; fail open: a failure on one hint leaves it exactly as core built it, the others are still
 /// rewritten, nothing escapes, and each exception type is logged once at Warning per filter instance (afterwards at Debug); the
 /// registrator makes the filter a DI singleton (added through <c>Filters.AddService</c>), so that is once per process.
-/// Not covered: hints of other kinds; any other
-/// endpoint that builds names without <c>IDtoService</c>.
+/// The filter is a GLOBAL singleton service filter: it is constructed by DI outside every fail-open block, so a missing registration or
+/// an unresolvable constructor dependency would fail EVERY MVC action, not just search (the registrator tests resolve it from a
+/// validated container for that reason). A user with no settings entry is skipped before the hint loop (no lookups at all).
+/// Cost: for a user with languages, each Movie/Series/Episode/Season hint costs one <c>GetItemById</c> (a database read when core's
+/// item cache is cold, so up to the search limit of reads per request) plus the series lookup for episodes and seasons.
+/// Not covered: hints of other kinds; any other endpoint that builds names without <c>IDtoService</c>; a user who has a settings entry
+/// with an empty language list (not short-circuited, they still pay the lookups).
 /// </remarks>
 public class SearchHintsFilter : IAsyncActionFilter
 {
@@ -42,6 +48,7 @@ public class SearchHintsFilter : IAsyncActionFilter
     private readonly ConcurrentDictionary<Type, byte> _loggedFailureKinds = new();
 
     private readonly DisplayNameResolver _resolver;
+    private readonly IUserLanguageSettings _settings;
     private readonly ILibraryManager _libraryManager;
     private readonly ILogger<SearchHintsFilter> _logger;
 
@@ -49,11 +56,13 @@ public class SearchHintsFilter : IAsyncActionFilter
     /// Initializes a new instance of the <see cref="SearchHintsFilter"/> class.
     /// </summary>
     /// <param name="resolver">Decides the displayed names.</param>
+    /// <param name="settings">Per-user enabled languages (tells which users have anything to rewrite).</param>
     /// <param name="libraryManager">Looks up the item behind each hint.</param>
     /// <param name="logger">The logger.</param>
-    public SearchHintsFilter(DisplayNameResolver resolver, ILibraryManager libraryManager, ILogger<SearchHintsFilter> logger)
+    public SearchHintsFilter(DisplayNameResolver resolver, IUserLanguageSettings settings, ILibraryManager libraryManager, ILogger<SearchHintsFilter> logger)
     {
         _resolver = resolver;
+        _settings = settings;
         _libraryManager = libraryManager;
         _logger = logger;
     }
@@ -109,6 +118,13 @@ public class SearchHintsFilter : IAsyncActionFilter
         }
 
         if (userId.Equals(Guid.Empty) || result.SearchHints is null)
+        {
+            return;
+        }
+
+        // A user with no settings entry has nothing enabled, so no hint can change: skip the per-hint lookups entirely.
+        // (A user WITH an entry but an empty list is not short-circuited here; the resolver then finds nothing enabled per hint.)
+        if (!_settings.GetConfiguredUserIds().Contains(userId))
         {
             return;
         }
