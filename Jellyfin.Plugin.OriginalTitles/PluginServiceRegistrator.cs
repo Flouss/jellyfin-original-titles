@@ -29,6 +29,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             _ => new UserLanguageSettings(() => Plugin.Instance?.Configuration ?? new PluginConfiguration()));
         serviceCollection.AddSingleton<DisplayNameResolver>();
         DecorateDtoService(serviceCollection);
+        serviceCollection.Configure<Microsoft.AspNetCore.Mvc.MvcOptions>(options => options.Filters.Add<Api.SearchHintsFilter>());
 
         // Search provider dependencies (library event relay, title index, ISearchProvider). Mandatory: without them the provider
         // cannot be constructed.
