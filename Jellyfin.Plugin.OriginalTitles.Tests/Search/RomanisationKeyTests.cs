@@ -8,7 +8,7 @@ namespace Jellyfin.Plugin.OriginalTitles.Tests.Search;
 /// transliterator output recorded in docs/spike.md (real ICU via Jellyfin.Extensions, observed 2026-10-07).
 /// Pipeline order (one word): lowercase; drop U+02BF/U+02BE and apostrophes; strip a leading al/el (only when 3+ chars remain);
 /// digits (3,2 dropped; 7 to h; 5 to kh; 9 to q); digraphs (kh to x, sh/ch to c, th to t, dh/dz to d, gh to g);
-/// drop a e i o u, and w/y whose neighbours (judged before any dropping) are both consonants; collapse doubled letters LAST.
+/// drop a e i o u and w/y everywhere EXCEPT at the start of the word (ruling R7); collapse doubled letters LAST.
 /// </summary>
 public class RomanisationKeyTests
 {
@@ -35,8 +35,11 @@ public class RomanisationKeyTests
     [InlineData("lion", "ln")]
     [InlineData("lbn", "lbn")]
 
-    // U+02BF (ayn as emitted by ICU) is dropped like Arabizi 3: "ly" stays (y is last, not between two consonants)
-    [InlineData("\u02BFly", "ly")]
+    // U+02BF (ayn as emitted by ICU) is dropped like Arabizi 3: ly -> y is not initial, dropped -> l
+    [InlineData("\u02BFly", "l")]
+
+    // Arabizi 3la -> 3 dropped: la -> drop a -> l (the same key as the ICU word above)
+    [InlineData("3la", "l")]
 
     // U+02BE (hamza as emitted by ICU) is dropped like Arabizi 2: amr -> drop a -> mr
     [InlineData("\u02BEamr", "mr")]
@@ -86,8 +89,8 @@ public class RomanisationKeyTests
     [InlineData("shams", "cms")]
     [InlineData("chams", "cms")]
 
-    // thawra -> th to t: tawra -> a,a dropped; w sits between vowel a and consonant r, so it stays: twr
-    [InlineData("thawra", "twr")]
+    // thawra -> th to t: tawra -> a,a dropped; w is not initial, dropped: tr
+    [InlineData("thawra", "tr")]
 
     // dhahab -> dh to d: dahab -> drop a,a: dhb (the second h is a plain h) ; dzair -> dair -> dr
     [InlineData("dhahab", "dhb")]
@@ -103,21 +106,30 @@ public class RomanisationKeyTests
 
     [Theory]
 
-    // bayt: y between vowel a and consonant t is kept: b,y,t
-    [InlineData("bayt", "byt")]
+    // bayt: b,a,y,t -> a dropped, y not initial dropped: bt
+    [InlineData("bayt", "bt")]
 
-    // mwsh -> sh to c: mwc ; w between consonants m and c is dropped: mc
+    // mwsh -> sh to c: mwc ; w not initial, dropped: mc
     [InlineData("mwsh", "mc")]
 
-    // thnyty -> tnyty ; first y between n and t dropped, final y (no right neighbour) kept: tnty
-    [InlineData("thnyty", "tnty")]
+    // thnyty -> th to t: tnyty ; both y are not initial, dropped: tnt
+    [InlineData("thnyty", "tnt")]
 
-    // fy: y is last, no right neighbour: kept
-    [InlineData("fy", "fy")]
+    // fy: the final y is dropped too: f (so ICU fy meets Arabizi fi -> f)
+    [InlineData("fy", "f")]
+    [InlineData("fi", "f")]
 
-    // yalla: leading y has no left neighbour: kept; a,a dropped; ll collapsed: yl
+    // yalla: y is the first char, kept; a,a dropped; ll collapsed: yl
     [InlineData("yalla", "yl")]
-    public void KeyOf_WAndYAreDroppedOnlyBetweenConsonants(string word, string expected)
+
+    // initial y/w are kept: yasmine -> y,s,m,n (a,i,e dropped) = ysmn ; walid -> w,l,d (a,i dropped) = wld
+    [InlineData("yasmine", "ysmn")]
+    [InlineData("walid", "wld")]
+
+    // absence companions, the same letters NOT first are dropped: ayasmine -> a,y,a,s,m,i,n,e -> smn ; awalid -> ld
+    [InlineData("ayasmine", "smn")]
+    [InlineData("awalid", "ld")]
+    public void KeyOf_WAndYAreDroppedEverywhereButTheStart(string word, string expected)
     {
         Assert.Equal(expected, RomanisationKey.KeyOf(word));
     }
@@ -171,16 +183,16 @@ public class RomanisationKeyTests
     public void TransliteratedKeysOf_RealIcuOutputOfTheAcceptanceTitle()
     {
         // docs/spike.md: ICU renders الخطاب على الباب as "alkhtab \u02BFly albab".
-        // alkhtab -> xtb ; \u02BFly -> ly (ayn dropped, y is last) ; albab -> b
-        Assert.Equal(new[] { "xtb", "ly", "b" }, RomanisationKey.TransliteratedKeysOf("الخطاب على الباب"));
+        // alkhtab -> xtb ; \u02BFly -> ly (ayn dropped) -> y not initial, dropped: l ; albab -> b
+        Assert.Equal(new[] { "xtb", "l", "b" }, RomanisationKey.TransliteratedKeysOf("الخطاب على الباب"));
     }
 
     [Fact]
     public void TransliteratedKeysOf_RealIcuOutputOfTheSecondTitle()
     {
         // docs/spike.md: ICU renders موش في ثنيتي as "mwsh fy thnyty" (matches the live SortName).
-        // mwsh -> mc ; fy -> fy ; thnyty -> tnty
-        Assert.Equal(new[] { "mc", "fy", "tnty" }, RomanisationKey.TransliteratedKeysOf("موش في ثنيتي"));
+        // mwsh -> mc ; fy -> f ; thnyty -> tnt
+        Assert.Equal(new[] { "mc", "f", "tnt" }, RomanisationKey.TransliteratedKeysOf("موش في ثنيتي"));
     }
 
     [Fact]

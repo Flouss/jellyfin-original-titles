@@ -16,9 +16,9 @@ namespace Jellyfin.Plugin.OriginalTitles.Search;
 /// lowercase; drop U+02BF/U+02BE and apostrophes; strip a leading <c>al</c>/<c>el</c> (no hyphen, only when at least
 /// <see cref="MinArticleRest"/> characters remain); digits (<c>3</c>/<c>2</c> dropped, <c>7</c> to <c>h</c>, <c>5</c> to <c>kh</c>,
 /// <c>9</c> to <c>q</c>); digraphs (kh to x, sh/ch to c, th to t, dh/dz to d, gh to g); drop <c>a e i o u</c> and <c>w</c>/<c>y</c>
-/// whose neighbours are both consonants (judged on the string before any dropping); collapse doubled letters last.
+/// everywhere except at the start of the word (ruling R7); collapse doubled letters last.
 /// A hyphenated article (<c>al-</c>, <c>el-</c>, <c>l-</c>) is stripped by <see cref="KeysOf"/>; a bare <c>l</c> is never an article.
-/// Blind spots (see the Task 6 report): a final <c>y</c>/<c>w</c> is kept (so Arabizi <c>fi</c> never meets ICU <c>fy</c>),
+/// Blind spots (see the Task 6 report): dropping w/y raises key collisions among short words (<c>bayt</c> and <c>bt</c>),
 /// unmapped digits (0, 1, 4, 6, 8) stay as characters, and a word whose key is empty (for example <c>3</c> or <c>a</c>) is ignored.
 /// </remarks>
 public static class RomanisationKey
@@ -237,7 +237,9 @@ public static class RomanisationKey
                 continue;
             }
 
-            if (c is 'w' or 'y' && i > 0 && i < w.Length - 1 && IsConsonant(w[i - 1]) && IsConsonant(w[i + 1]))
+            // w/y are dropped everywhere except as the first character of the (already digit-mapped, article-stripped) word
+            // (ruling R7: lets Arabizi "fi" meet ICU "fy" and "3la" meet "ly").
+            if (c is 'w' or 'y' && i > 0)
             {
                 continue;
             }
@@ -246,11 +248,6 @@ public static class RomanisationKey
         }
 
         return sb.ToString();
-    }
-
-    private static bool IsConsonant(char c)
-    {
-        return char.IsLetterOrDigit(c) && c is not ('a' or 'e' or 'i' or 'o' or 'u' or 'w' or 'y');
     }
 
     private static string CollapseDoubles(string w)

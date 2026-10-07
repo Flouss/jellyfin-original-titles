@@ -10,13 +10,13 @@ namespace Jellyfin.Plugin.OriginalTitles.Tests.Search;
 /// </summary>
 public class TitleMatcherTests
 {
-    // ICU output for الخطاب على الباب (docs/spike.md); title keys by hand: xtb, ly, b.
+    // ICU output for الخطاب على الباب (docs/spike.md); title keys by hand: xtb, l, b.
     private const string AcceptanceTitle = "alkhtab \u02BFly albab";
 
     [Fact]
     public void Acceptance_KhottabAlBeb_MatchesTheArabicTitle_WithFullCoverage()
     {
-        // query keys [xtb, b]; title keys [xtb, ly, b]; xtb = xtb, b = b -> 2/2
+        // query keys [xtb, b]; title keys [xtb, l, b]; xtb = xtb, b = b -> 2/2
         Assert.Equal(1.0, TitleMatcher.Coverage("khottab al beb", AcceptanceTitle));
         Assert.True(TitleMatcher.IsMatch("khottab al beb", AcceptanceTitle));
     }
@@ -24,7 +24,7 @@ public class TitleMatcherTests
     [Fact]
     public void Acceptance_ThroughTheRealTransliterator()
     {
-        // The Arabic title goes through real ICU (Jellyfin.Extensions); title keys [xtb, ly, b] derived by hand in RomanisationKeyTests.
+        // The Arabic title goes through real ICU (Jellyfin.Extensions); title keys [xtb, l, b] derived by hand in RomanisationKeyTests.
         var titleKeys = RomanisationKey.TransliteratedKeysOf("الخطاب على الباب");
         var queryKeys = RomanisationKey.TransliteratedKeysOf("khottab al beb");
         Assert.Equal(1.0, TitleMatcher.Coverage(queryKeys, titleKeys));
@@ -34,7 +34,7 @@ public class TitleMatcherTests
     [Fact]
     public void PartialCoverage_IsNotAMatch_WithPresenceCompanion()
     {
-        // khottab zzzz: keys [xtb, z] (zzzz collapses to z); z matches none of [xtb, ly, b] -> 1/2
+        // khottab zzzz: keys [xtb, z] (zzzz collapses to z); z matches none of [xtb, l, b] -> 1/2
         Assert.Equal(0.5, TitleMatcher.Coverage("khottab zzzz", AcceptanceTitle));
         Assert.False(TitleMatcher.IsMatch("khottab zzzz", AcceptanceTitle));
 
@@ -94,7 +94,7 @@ public class TitleMatcherTests
         // presence companion: title "beb" (key b) matches
         Assert.True(TitleMatcher.IsMatch("bab", "beb"));
 
-        // a single-letter query "c" does not match title keys [xtb, ly, b]
+        // a single-letter query "c" does not match title keys [xtb, l, b]
         Assert.False(TitleMatcher.IsMatch("c", AcceptanceTitle));
     }
 
@@ -128,12 +128,17 @@ public class TitleMatcherTests
     [Fact]
     public void StopwordInTheQuery_IsIgnored_ButANonStopwordCounts()
     {
-        // with the stopword rule "al" is not a query word: [xtb, b] vs [xtb, ly, b] -> 1.0.
-        // Without it "al" would key to l, which matches nothing in [xtb, ly, b] (1-char key, exact only) -> 2/3.
-        Assert.Equal(1.0, TitleMatcher.Coverage("khottab al beb", AcceptanceTitle));
+        // Title without any l-key: "alkhtab albab" -> keys [xtb, b].
+        const string Title = "alkhtab albab";
 
-        // "ali" is not a stopword (key l) and really counts and is uncovered: 2/3
-        Assert.Equal(2.0 / 3.0, TitleMatcher.Coverage("khottab ali beb", AcceptanceTitle), 10);
+        // with the stopword rule "al" is not a query word: [xtb, b] vs [xtb, b] -> 1.0.
+        // Without it "al" would key to l, which matches nothing in [xtb, b] -> 2/3 (the mutation test relies on this).
+        Assert.Equal(1.0, TitleMatcher.Coverage("khottab al beb", Title));
+        Assert.True(TitleMatcher.IsMatch("khottab al beb", Title));
+
+        // presence companion: "ali" is not a stopword (key l) and really counts; it is uncovered here: 2/3
+        Assert.Equal(2.0 / 3.0, TitleMatcher.Coverage("khottab ali beb", Title), 10);
+        Assert.False(TitleMatcher.IsMatch("khottab ali beb", Title));
     }
 
     [Fact]
@@ -154,17 +159,35 @@ public class TitleMatcherTests
     }
 
     [Fact]
-    public void SecondTitle_KnownLimitation_FinalYIsNotDropped()
+    public void SecondTitle_NaturalArabiziSpellingMatches()
     {
-        // Title موش في ثنيتي -> ICU "mwsh fy thnyty" -> keys [mc, fy, tnty].
+        // Title موش في ثنيتي -> ICU "mwsh fy thnyty" -> keys [mc, f, tnt] (w/y dropped unless initial, ruling R7).
         const string Title = "mwsh fy thnyty";
 
-        // a spelling that avoids the short word matches fully: mouch -> mc ; thniti -> tnt (vs tnty: 3 vs 4 chars, distance 1)
-        Assert.True(TitleMatcher.IsMatch("mouch thniti", Title));
+        // mouch -> mouc -> mc ; fi -> f ; thniti -> tniti -> tnt : all three covered, 3/3
+        Assert.Equal(1.0, TitleMatcher.Coverage("mouch fi thniti", Title));
+        Assert.True(TitleMatcher.IsMatch("mouch fi thniti", Title));
 
-        // LIMITATION (reported, not fixed): the natural Arabizi "fi" keys to f, but the title's fy keeps its final y
-        // (y is only dropped BETWEEN consonants). f vs fy: 1-char key needs exact equality -> uncovered; coverage 2/3, no match.
-        Assert.Equal(2.0 / 3.0, TitleMatcher.Coverage("mouch fi thniti", Title), 10);
-        Assert.False(TitleMatcher.IsMatch("mouch fi thniti", Title));
+        // the same through the real transliterator on the Arabic title
+        Assert.True(TitleMatcher.IsMatch(
+            RomanisationKey.TransliteratedKeysOf("mouch fi thniti"),
+            RomanisationKey.TransliteratedKeysOf("موش في ثنيتي")));
+
+        // absence companion: "ft" keys to ft (2 chars), which is not f (exact only) -> 2/3, no match
+        Assert.Equal(2.0 / 3.0, TitleMatcher.Coverage("mouch ft thniti", Title), 10);
+        Assert.False(TitleMatcher.IsMatch("mouch ft thniti", Title));
+    }
+
+    [Fact]
+    public void ArabiziAyn_MatchesTheIcuWord()
+    {
+        // 3la -> la -> l ; ICU ayn-ly -> ly -> l (y not initial, dropped): equal 1-char keys
+        Assert.True(TitleMatcher.IsMatch("3la", "\u02BFly"));
+        Assert.True(TitleMatcher.IsMatch(
+            RomanisationKey.TransliteratedKeysOf("3la"),
+            RomanisationKey.TransliteratedKeysOf("على")));
+
+        // absence companion: 3ma -> ma -> m is not l
+        Assert.False(TitleMatcher.IsMatch("3ma", "\u02BFly"));
     }
 }
