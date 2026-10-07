@@ -30,9 +30,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
-        // Plugin.Instance is created after DI registration; the provider is evaluated per call and never null.
-        serviceCollection.AddSingleton<IUserLanguageSettings>(
-            _ => new UserLanguageSettings(() => Plugin.Instance?.Configuration ?? new PluginConfiguration()));
+        // Plugin.Instance is created after DI registration; Plugin.CurrentConfiguration is evaluated per call and never null. It is the
+        // ONE provider (also used by AddOriginalTitlesSearch's fallback); never inline a second lambda here.
+        serviceCollection.AddSingleton<IUserLanguageSettings>(_ => new UserLanguageSettings(Plugin.CurrentConfiguration));
         serviceCollection.AddSingleton<DisplayNameResolver>();
         DecorateDtoService(serviceCollection);
         serviceCollection.AddSingleton<Api.SearchHintsFilter>();

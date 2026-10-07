@@ -21,6 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Jellyfin.Plugin.OriginalTitles.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="Configuration\**\*.html" />
     <EmbeddedResource Include="Configuration\**\*.html" />
   </ItemGroup>

@@ -28,9 +28,8 @@ public static class SearchServiceCollectionExtensions
         services.TryAddSingleton<TitleIndex>();
         services.TryAddSingleton<ISearchItemAccess, LibrarySearchItemAccess>();
 
-        // Reads the live configuration on every call (the settings page replaces it on save).
-        services.TryAddSingleton<IUserLanguageSettings>(
-            _ => new UserLanguageSettings(() => Plugin.Instance?.Configuration ?? new PluginConfiguration()));
+        // Reads the live configuration on every call (the settings page replaces it on save) through the plugin's ONE provider.
+        services.TryAddSingleton<IUserLanguageSettings>(_ => new UserLanguageSettings(Plugin.CurrentConfiguration));
         return services;
     }
 }
