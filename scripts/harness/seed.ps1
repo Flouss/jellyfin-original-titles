@@ -25,9 +25,16 @@ $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $mediaDir = Join-Path $PSScriptRoot 'media'
 $envFile = Join-Path $root '.env.local'
 
-if ($BaseUrl -notmatch '^http://(127\.0\.0\.1|localhost):') {
-    throw "Refusing to talk to '$BaseUrl': the harness only ever targets the local container."
+# Parses the URL and compares the host exactly: a regex on the string also accepts 'http://127.0.0.1:80@evil.host/' (userinfo),
+# whose real host is evil.host.
+function Assert-LoopbackUrl([string]$Url) {
+    $u = $null
+    if (-not [uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$u) -or $u.Scheme -ne 'http' -or $u.UserInfo -or
+        ($u.Host -ne '127.0.0.1' -and $u.Host -ne 'localhost')) {
+        throw "Refusing to talk to '$Url': the harness only ever targets the local container."
+    }
 }
+Assert-LoopbackUrl $BaseUrl
 
 function U([string]$hexCodePoints) {
     -join ($hexCodePoints.Split(' ') | ForEach-Object { [char][Convert]::ToInt32($_, 16) })
@@ -83,12 +90,20 @@ function New-Video([string]$path) {
     New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
     $ff = @('-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=10:duration=2',
         '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest')
-    if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
-        & ffmpeg @ff $path
-    } else {
-        # No local ffmpeg: use the ffmpeg shipped in the Jellyfin image itself.
-        $dir = Split-Path $path; $name = Split-Path $path -Leaf
-        & docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffmpeg -v "${dir}:/out" jellyfin/jellyfin:12.2 @ff "/out/$name"
+    # Windows PowerShell 5.1 turns a native command's stderr into a terminating NativeCommandError under 'Stop' when stderr is
+    # redirected, which hides the clear message below; the exit code is the real check.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+            & ffmpeg @ff $path
+        } else {
+            # No local ffmpeg: use the ffmpeg shipped in the Jellyfin image itself.
+            $dir = Split-Path $path; $name = Split-Path $path -Leaf
+            & docker run --rm --entrypoint /usr/lib/jellyfin-ffmpeg/ffmpeg -v "${dir}:/out" jellyfin/jellyfin:12.2 @ff "/out/$name"
+        }
+    } finally {
+        $ErrorActionPreference = $previousPreference
     }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $path)) { throw "ffmpeg failed to create $path" }
 }

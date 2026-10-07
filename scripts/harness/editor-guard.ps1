@@ -19,9 +19,19 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $cfg = @{}
-Get-Content (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')) '.env.local') | ForEach-Object { if ($_ -match '^\s*([A-Z_]+)=(.*)$') { $cfg[$Matches[1]] = $Matches[2] } }
+$envFile = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')) '.env.local'
+Get-Content $envFile | ForEach-Object { if ($_ -match '^\s*([A-Z_]+)=(.*)$') { $cfg[$Matches[1]] = $Matches[2] } }
 $B = $cfg.BASE_URL
-if ($B -notmatch '^http://(127\.0\.0\.1|localhost):') { throw "Refusing to talk to '$B': the harness only ever targets the local container." }
+# Parses the URL and compares the host exactly: a regex on the string also accepts 'http://127.0.0.1:80@evil.host/' (userinfo),
+# whose real host is evil.host.
+function Assert-LoopbackUrl([string]$Url) {
+    $u = $null
+    if (-not [uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$u) -or $u.Scheme -ne 'http' -or $u.UserInfo -or
+        ($u.Host -ne '127.0.0.1' -and $u.Host -ne 'localhost')) {
+        throw "Refusing to talk to '$Url': the harness only ever targets the local container."
+    }
+}
+Assert-LoopbackUrl $B
 $pluginId = '7c1e5a3d-92b4-4f6e-8d0a-3b5f1c2e9a47'
 
 function U([string]$hex) { -join ($hex.Split(' ') | ForEach-Object { [char][Convert]::ToInt32($_, 16) }) }
@@ -44,7 +54,16 @@ function Jf([string]$Method, [string]$Path, $Body = $null, [string]$Token = $cfg
 # Control user (language list stays empty).
 $users = Jf GET '/Users'
 $control = $users | Where-Object { $_.Name -eq 'harness-user' }
-if (-not $control) { $control = Jf POST '/Users/New' @{ Name = 'harness-user'; Password = 'x' } }
+if (-not $control) {
+    # Random password, kept (like the admin's) in the untracked .env.local and never printed. Nothing here logs the control user in;
+    # the password exists so the account is not left with a guessable one.
+    $bytes = New-Object byte[] 18
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $cfg.CONTROL_PASSWORD = ([Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', 'x')
+    $lines = $cfg.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }
+    [System.IO.File]::WriteAllLines($envFile, [string[]]$lines)   # write before using, so the password is never lost
+    $control = Jf POST '/Users/New' @{ Name = 'harness-user'; Password = $cfg.CONTROL_PASSWORD }
+}
 $admin = $cfg.USER_ID
 $ctl = $control.Id
 
