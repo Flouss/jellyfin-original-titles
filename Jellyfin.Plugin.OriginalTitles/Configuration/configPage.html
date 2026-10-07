@@ -5,13 +5,119 @@
     <title>Original Titles</title>
 </head>
 <body>
-    <div id="OriginalTitlesConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+    <div id="OriginalTitlesConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button">
         <div data-role="content">
             <div class="content-primary">
-                <h2 class="sectionTitle">Original Titles</h2>
-                <p>No settings yet.</p>
+                <form id="OriginalTitlesConfigForm">
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h2 class="sectionTitle">Original Titles</h2>
+                    </div>
+                    <p>
+                        For each user, list the original-language codes (comma separated, e.g. <code>ar, fr</code>) whose movies and series
+                        are shown under their original title. Leave empty to change nothing for that user.
+                    </p>
+                    <div id="OriginalTitlesUsers"></div>
+                    <div style="margin-top: 2em;">
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
+
+        <script type="text/javascript">
+            (function () {
+                var pluginUniqueId = '7c1e5a3d-92b4-4f6e-8d0a-3b5f1c2e9a47';
+                var page = document.getElementById('OriginalTitlesConfigPage');
+
+                // Jellyfin returns user ids without dashes ("N" format) and plugin config Guids with dashes; compare dash-free, lowercase.
+                function key(id) {
+                    return String(id || '').replace(/-/g, '').toLowerCase();
+                }
+
+                function parseList(text) {
+                    var seen = {};
+                    var result = [];
+                    text.split(',').forEach(function (part) {
+                        var code = part.trim().toLowerCase();
+                        if (code && !seen[code]) {
+                            seen[code] = true;
+                            result.push(code);
+                        }
+                    });
+                    return result;
+                }
+
+                function render(users, config) {
+                    var languagesByUser = {};
+                    (config.Users || []).forEach(function (entry) {
+                        languagesByUser[key(entry.UserId)] = entry.Languages || [];
+                    });
+
+                    var container = document.getElementById('OriginalTitlesUsers');
+                    container.innerHTML = '';
+                    users.forEach(function (user) {
+                        var wrapper = document.createElement('div');
+                        wrapper.className = 'inputContainer';
+
+                        var label = document.createElement('label');
+                        label.className = 'inputLabel inputLabelUnfocused';
+                        label.textContent = user.Name;
+
+                        var input = document.createElement('input');
+                        input.type = 'text';
+                        input.setAttribute('is', 'emby-input');
+                        input.className = 'originalTitlesLanguages';
+                        input.setAttribute('data-user-id', user.Id);
+                        input.value = (languagesByUser[key(user.Id)] || []).join(', ');
+
+                        wrapper.appendChild(label);
+                        wrapper.appendChild(input);
+                        container.appendChild(wrapper);
+                    });
+                }
+
+                page.addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    Promise.all([
+                        ApiClient.getUsers(),
+                        ApiClient.getPluginConfiguration(pluginUniqueId)
+                    ]).then(function (results) {
+                        render(results[0], results[1]);
+                        Dashboard.hideLoadingMsg();
+                    }).catch(function (error) {
+                        console.error('Original Titles: failed to load', error);
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+                document.getElementById('OriginalTitlesConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+
+                    ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
+                        var entries = [];
+                        page.querySelectorAll('.originalTitlesLanguages').forEach(function (input) {
+                            var languages = parseList(input.value);
+                            if (languages.length > 0) {
+                                entries.push({ UserId: input.getAttribute('data-user-id'), Languages: languages });
+                            }
+                        });
+                        config.Users = entries;
+                        return ApiClient.updatePluginConfiguration(pluginUniqueId, config);
+                    }).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    }).catch(function (error) {
+                        console.error('Original Titles: failed to save', error);
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert('Failed to save configuration: ' + error.message);
+                    });
+
+                    return false;
+                });
+            })();
+        </script>
     </div>
 </body>
 </html>
