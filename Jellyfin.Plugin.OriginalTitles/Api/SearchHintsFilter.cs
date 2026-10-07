@@ -26,7 +26,8 @@ namespace Jellyfin.Plugin.OriginalTitles.Api;
 /// <see cref="SearchHintResult"/>, which no other core action returns.
 /// Invariants: never writes to a <c>BaseItem</c>; an unresolved user (<see cref="Guid.Empty"/>, e.g. an API key without
 /// <c>userId</c>) is never rewritten; fail open: a failure on one hint leaves it exactly as core built it, the others are still
-/// rewritten, nothing escapes, and each exception type is logged once at Warning per process (afterwards at Debug).
+/// rewritten, nothing escapes, and each exception type is logged once at Warning per filter instance (afterwards at Debug); the
+/// registrator makes the filter a DI singleton (added through <c>Filters.AddService</c>), so that is once per process.
 /// Not covered: hints of other kinds; any other
 /// endpoint that builds names without <c>IDtoService</c>.
 /// </remarks>
@@ -37,8 +38,8 @@ public class SearchHintsFilter : IAsyncActionFilter
     /// </summary>
     public const string UserIdClaimType = "Jellyfin-UserId";
 
-    // Filters.Add<T>() builds a new filter instance per request, so the log-once state must outlive the instance.
-    private static readonly ConcurrentDictionary<Type, byte> _loggedFailureKinds = new();
+    // Instance state: the filter is a singleton (Filters.AddService + AddSingleton in the registrator), so this lives for the process.
+    private readonly ConcurrentDictionary<Type, byte> _loggedFailureKinds = new();
 
     private readonly DisplayNameResolver _resolver;
     private readonly ILibraryManager _libraryManager;

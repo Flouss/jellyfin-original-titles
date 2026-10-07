@@ -200,6 +200,30 @@ public sealed class SearchHintsFilterTests : IDisposable
     }
 
     [Fact]
+    public async Task LogOnce_SameExceptionTypeWarnsOnceThenDebug_PerFilterInstance()
+    {
+        // Two hints that both throw NullReferenceException (same setup as FailOpen: own language null, SeriesId set,
+        // BaseItem.LibraryManager null).
+        var first = new Episode { Id = Guid.NewGuid(), Name = EpisodeName, SeriesName = SeriesName, SeriesId = Guid.NewGuid(), OriginalLanguage = null };
+        var second = new Episode { Id = Guid.NewGuid(), Name = EpisodeName, SeriesName = SeriesName, SeriesId = Guid.NewGuid(), OriginalLanguage = null };
+        var filter = Build(out var log, first, second);
+
+        // One request, two failures of the same type: first at Warning, second at Debug.
+        await RunAsync(filter, ArabicUser, Hint(first, EpisodeName, SeriesName), Hint(second, EpisodeName, SeriesName));
+        Assert.Equal(new[] { LogLevel.Warning, LogLevel.Debug }, log.Levels);
+
+        // A later request on the same (singleton) filter: that type was already warned about -> Debug only.
+        await RunAsync(filter, ArabicUser, Hint(first, EpisodeName, SeriesName));
+        Assert.Equal(new[] { LogLevel.Warning, LogLevel.Debug, LogLevel.Debug }, log.Levels);
+
+        // The log-once state belongs to the filter instance, not the process: a fresh instance warns again. (With process-global
+        // state this would be Debug, and the outcome would depend on test order.)
+        var fresh = Build(out var freshLog, first);
+        await RunAsync(fresh, ArabicUser, Hint(first, EpisodeName, SeriesName));
+        Assert.Equal(new[] { LogLevel.Warning }, freshLog.Levels);
+    }
+
+    [Fact]
     public async Task OtherResults_PassThroughUntouched()
     {
         var filter = Build(out var log, ArabicMovie());
@@ -215,14 +239,18 @@ public sealed class SearchHintsFilterTests : IDisposable
     [Fact]
     public void Registrator_AddsTheFilterGloballyToMvc()
     {
-        // The registrator adds exactly one global filter of type SearchHintsFilter (built per request by MVC's TypeFilterAttribute).
+        // The registrator registers SearchHintsFilter once as a singleton and adds exactly one global ServiceFilterAttribute for it,
+        // so MVC resolves that one instance (its log-once state lives as long as the process) instead of building one per request.
         var services = new ServiceCollection();
         new PluginServiceRegistrator().RegisterServices(services, null!);
         using var provider = services.BuildServiceProvider();
 
+        var descriptor = Assert.Single(services, d => d.ServiceType == typeof(SearchHintsFilter));
+        Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+
         var filters = provider.GetRequiredService<IOptions<MvcOptions>>().Value.Filters;
-        var added = Assert.Single(filters.OfType<TypeFilterAttribute>(), f => f.ImplementationType == typeof(SearchHintsFilter));
-        Assert.NotNull(added);
+        Assert.Single(filters.OfType<ServiceFilterAttribute>(), f => f.ServiceType == typeof(SearchHintsFilter));
+        Assert.DoesNotContain(filters.OfType<TypeFilterAttribute>(), f => f.ImplementationType == typeof(SearchHintsFilter));
     }
 
     // ---------- helpers ----------
@@ -284,6 +312,8 @@ public sealed class SearchHintsFilterTests : IDisposable
     {
         public List<Exception?> Entries { get; } = new();
 
+        public List<LogLevel> Levels { get; } = new();
+
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
 
@@ -294,6 +324,7 @@ public sealed class SearchHintsFilterTests : IDisposable
             if (logLevel is LogLevel.Warning or LogLevel.Debug)
             {
                 Entries.Add(exception);
+                Levels.Add(logLevel);
             }
         }
     }
