@@ -24,6 +24,9 @@ public class PluginServiceRegistratorTests
     // Sentinel the stand-in returns from GetPrimaryImageAspectRatio, proving calls reach it through the decorator.
     private const double StandInAspectRatio = 1.25;
 
+    // Sentinel of a later-registered stand-in (the last IDtoService registration wins in the container).
+    private const double LaterStandInAspectRatio = 0.5;
+
     private static ServiceCollection CoreServices()
     {
         var services = new ServiceCollection();
@@ -118,6 +121,28 @@ public class PluginServiceRegistratorTests
     }
 
     [Fact]
+    public void WithTwoCoreRegistrations_TheLastEffectiveOneIsWrapped()
+    {
+        // The container resolves the LAST IDtoService registration, so that is the one to decorate. Two stand-ins answer different
+        // aspect ratios: 1.25 (first, StandInCoreDtoService) and 0.5 (last, LaterStandInDtoService). Wrapping the first would
+        // answer 1.25; wrapping the last answers 0.5. Presence companion: the first stand-in really is registered (and unused).
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        services.AddSingleton<CoreDependency>();
+        services.AddSingleton<IDtoService, StandInCoreDtoService>();
+        services.AddSingleton<IDtoService, LaterStandInDtoService>();
+        Register(services);
+        using var provider = services.BuildServiceProvider();
+
+        var resolved = provider.GetRequiredService<IDtoService>();
+
+        Assert.IsType<OriginalTitleDtoService>(resolved);
+        Assert.Equal(LaterStandInAspectRatio, resolved.GetPrimaryImageAspectRatio(new Folder()));
+        Assert.NotEqual(StandInAspectRatio, LaterStandInAspectRatio);
+        Assert.Equal(0, provider.GetRequiredService<CoreDependency>().StandInsBuilt);
+    }
+
+    [Fact]
     public void NoCoreRegistration_AddsNoDtoService_AndDoesNotThrow()
     {
         // Fail open at registration time: nothing to wrap -> leave the collection without an IDtoService (core's job).
@@ -145,6 +170,21 @@ public class PluginServiceRegistratorTests
         }
 
         public double? GetPrimaryImageAspectRatio(BaseItem item) => StandInAspectRatio;
+
+        public BaseItemDto GetBaseItemDto(BaseItem item, DtoOptions options, User? user = null, BaseItem? owner = null)
+            => new() { Id = item.Id, Name = item.Name };
+
+        public IReadOnlyList<BaseItemDto> GetBaseItemDtos(IReadOnlyList<BaseItem> items, DtoOptions options, User? user = null, BaseItem? owner = null, bool skipVisibilityCheck = false)
+            => items.Select(i => new BaseItemDto { Id = i.Id, Name = i.Name }).ToArray();
+
+        public BaseItemDto GetItemByNameDto(BaseItem item, DtoOptions options, List<BaseItem>? taggedItems, User? user = null)
+            => new() { Id = item.Id, Name = item.Name };
+    }
+
+    /// <summary>A second core-like registration that sits after <see cref="StandInCoreDtoService"/> and answers a different ratio.</summary>
+    public sealed class LaterStandInDtoService : IDtoService
+    {
+        public double? GetPrimaryImageAspectRatio(BaseItem item) => LaterStandInAspectRatio;
 
         public BaseItemDto GetBaseItemDto(BaseItem item, DtoOptions options, User? user = null, BaseItem? owner = null)
             => new() { Id = item.Id, Name = item.Name };

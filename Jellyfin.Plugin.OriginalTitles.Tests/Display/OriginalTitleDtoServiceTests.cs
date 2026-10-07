@@ -308,6 +308,45 @@ public sealed class OriginalTitleDtoServiceTests : IDisposable
         Assert.Equal(0.75, service.GetPrimaryImageAspectRatio(movie));
     }
 
+    [Fact]
+    public void InnerServiceExceptions_PropagateUnchanged_ForBothDtoMethods()
+    {
+        // Documented invariant: fail-open covers only the plugin's own decision, never core's service. A sentinel thrown by the
+        // inner service must reach the caller as the very same instance (not wrapped, swallowed, or replaced by a made-up DTO).
+        // Presence companion: with a healthy inner service the same call returns a DTO and throws nothing.
+        var sentinel = new InvalidOperationException("core failed");
+        var service = new OriginalTitleDtoService(new ThrowingCoreDtoService(sentinel), Resolver(), new CapturingLogger());
+        var user = UserWithId(ArabicUser);
+
+        var single = Assert.Throws<InvalidOperationException>(() => service.GetBaseItemDto(ArabicMovie(), new DtoOptions(), user));
+        Assert.Same(sentinel, single);
+
+        var batch = Assert.Throws<InvalidOperationException>(() => service.GetBaseItemDtos(new BaseItem[] { ArabicMovie() }, new DtoOptions(), user));
+        Assert.Same(sentinel, batch);
+
+        var (healthy, _, _) = Build();
+        Assert.Equal(MovieOriginal, healthy.GetBaseItemDto(ArabicMovie(), new DtoOptions(), user).Name);
+    }
+
+    /// <summary>Stand-in for a core service that fails: every DTO method throws the given sentinel.</summary>
+    private sealed class ThrowingCoreDtoService : IDtoService
+    {
+        private readonly Exception _sentinel;
+
+        public ThrowingCoreDtoService(Exception sentinel)
+        {
+            _sentinel = sentinel;
+        }
+
+        public double? GetPrimaryImageAspectRatio(BaseItem item) => throw _sentinel;
+
+        public BaseItemDto GetBaseItemDto(BaseItem item, DtoOptions options, User? user = null, BaseItem? owner = null) => throw _sentinel;
+
+        public IReadOnlyList<BaseItemDto> GetBaseItemDtos(IReadOnlyList<BaseItem> items, DtoOptions options, User? user = null, BaseItem? owner = null, bool skipVisibilityCheck = false) => throw _sentinel;
+
+        public BaseItemDto GetItemByNameDto(BaseItem item, DtoOptions options, List<BaseItem>? taggedItems, User? user = null) => throw _sentinel;
+    }
+
     /// <summary>
     /// Stand-in for core DtoService: builds DTOs the way v12.2 DtoService.cs does for the fields under test
     /// (dto.Id = item.Id ~1177, dto.Name = item.Name ~1222, Episode/Season dto.SeriesName = SeriesName ~1521/~1593),
