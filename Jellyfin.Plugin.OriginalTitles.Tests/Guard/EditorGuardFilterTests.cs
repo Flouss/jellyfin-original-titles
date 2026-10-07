@@ -274,15 +274,42 @@ public sealed class EditorGuardFilterTests : IDisposable
     }
 
     [Fact]
-    public void Registrator_AddsTheGuardGloballyToMvc_NextToTheHintsFilter()
+    public void Registrator_AddsTheGuardGloballyToMvc_AsOneSingleton_LikeTheHintsFilter()
     {
+        // Same shape as SearchHintsFilter (Task 4 review): one Singleton descriptor and exactly one global ServiceFilterAttribute, so MVC
+        // resolves that one instance for every action instead of building a TypeFilterAttribute instance per request. Safe because the
+        // guard keeps no per-request state and depends only on singletons.
         var services = new ServiceCollection();
         new PluginServiceRegistrator().RegisterServices(services, null!);
         using var provider = services.BuildServiceProvider();
 
-        var filters = provider.GetRequiredService<IOptions<MvcOptions>>().Value.Filters.OfType<TypeFilterAttribute>().ToList();
-        Assert.Single(filters, f => f.ImplementationType == typeof(EditorGuardFilter));
-        Assert.Single(filters, f => f.ImplementationType == typeof(SearchHintsFilter));
+        var descriptor = Assert.Single(services, d => d.ServiceType == typeof(EditorGuardFilter));
+        Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+
+        var filters = provider.GetRequiredService<IOptions<MvcOptions>>().Value.Filters;
+        Assert.Single(filters.OfType<ServiceFilterAttribute>(), f => f.ServiceType == typeof(EditorGuardFilter));
+        Assert.DoesNotContain(filters.OfType<TypeFilterAttribute>(), f => f.ImplementationType == typeof(EditorGuardFilter));
+
+        // Companion: the hints filter is registered in its current shape next to it.
+        Assert.Single(filters.OfType<ServiceFilterAttribute>(), f => f.ServiceType == typeof(SearchHintsFilter));
+    }
+
+    [Fact]
+    public void OneInstance_LogsEveryFailureAndEveryTripwire_ThereIsNoLogOnceState()
+    {
+        // The guard is a process-wide singleton. Unlike the hints filter it has NO log-once state: a metadata save is rare and each
+        // unguarded save must be visible. On ONE instance: failing lookup, failing lookup, bad arguments, bad arguments -> the level
+        // sequence is exactly [Warning, Warning, Error, Error] (nothing demoted to Debug, nothing swallowed).
+        var movie = ArabicMovie();
+        var filter = Build(out _, out var log, throwOnGet: true, movie);
+        var badArguments = new Dictionary<string, object?> { ["id"] = movie.Id, ["dto"] = new BaseItemDto { Name = MovieOriginal } };
+
+        Run(filter, movie.Id, new BaseItemDto { Name = MovieOriginal });
+        Run(filter, movie.Id, new BaseItemDto { Name = MovieOriginal });
+        filter.OnActionExecuting(Context(Descriptor("ItemUpdate", "UpdateItem"), badArguments));
+        filter.OnActionExecuting(Context(Descriptor("ItemUpdate", "UpdateItem"), badArguments));
+
+        Assert.Equal(new[] { LogLevel.Warning, LogLevel.Warning, LogLevel.Error, LogLevel.Error }, log.Entries.Select(e => e.Level));
     }
 
     // ---------- helpers ----------

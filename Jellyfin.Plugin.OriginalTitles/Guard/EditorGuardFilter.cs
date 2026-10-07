@@ -25,7 +25,9 @@ namespace Jellyfin.Plugin.OriginalTitles.Guard;
 /// controller's own single write then keeps the real name, and the series cascade propagates the real name. The filter itself NEVER
 /// writes (no repository call, so no <c>ItemUpdated</c> re-entry and no loop is possible); the only effect is on the bound request.</para>
 /// <para>Invariants: other actions are not even looked up; fail open (any exception leaves the request as posted, logged at Warning);
-/// the requesting user plays no part ("shown to at least one configured user"), because API-key requests carry no user.</para>
+/// the requesting user plays no part ("shown to at least one configured user"), because API-key requests carry no user.
+/// Lifetime: ONE process-wide singleton (registrator: <c>AddSingleton</c> + <c>Filters.AddService</c>), so it must keep no per-request
+/// state and depend only on singletons. It has no log-once state: every unguarded save (Warning) and every tripwire hit (Error) is logged.</para>
 /// <para>Tripwire: the guard depends on the v12.2 argument names <c>itemId</c> (Guid) and <c>request</c> (BaseItemDto). If the matched
 /// action arrives without them (an API change), it logs an Error naming them on every save instead of silently doing nothing. It logs
 /// rather than throws: throwing would make every metadata save fail. Not covered by the tripwire: a renamed controller or action (the
