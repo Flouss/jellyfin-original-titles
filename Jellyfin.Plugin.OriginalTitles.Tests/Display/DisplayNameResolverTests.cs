@@ -96,6 +96,36 @@ public sealed class DisplayNameResolverTests : IDisposable
         Assert.Equal("Mouch Fi Thniti 2", resolver.Resolve(ArabicMovie(originalTitle: "Mouch Fi Thniti 2"), ArabicUser).Name);
     }
 
+    [Fact]
+    public void Movie_NameComparisonIsOrdinal_SoACaseOnlyDifferenceIsStillRewritten()
+    {
+        // Pins current behaviour: "differs from Name" is string.Equals(..., StringComparison.Ordinal), i.e. case-sensitive.
+        // Name "Mouch" vs OriginalTitle "MOUCH": 'M','O','U','C','H' vs 'M','o','u','c','h' differ ordinally -> they "differ" ->
+        // rewritten to "MOUCH" (a case-insensitive comparison would call them equal and leave it untouched).
+        // Presence/absence companion: an identical-case pair ("Mouch" / "Mouch") is untouched.
+        var resolver = Resolver();
+
+        Assert.Equal("MOUCH", resolver.Resolve(ArabicMovie(originalTitle: "MOUCH", name: "Mouch"), ArabicUser).Name);
+        AssertUntouched(resolver.Resolve(ArabicMovie(originalTitle: "Mouch", name: "Mouch"), ArabicUser));
+    }
+
+    [Fact]
+    public void Movie_OriginalTitleWithSurroundingWhitespace_IsReturnedUntrimmed_AndNotEqualToTheTrimmedName()
+    {
+        // Pins MEASURED behaviour (not endorsed; reported as a finding): the blank check is IsNullOrWhiteSpace on the raw value and
+        // the equality check compares the raw value, neither trims. OriginalTitle " X " (spaces at both ends) is non-blank and
+        // ordinally different from Name "X" -> the replacement is the UNTRIMMED " X " (length 3). Companion: "X" vs "X" is untouched,
+        // and a title of only spaces is untouched (blank check).
+        var resolver = Resolver();
+
+        var padded = resolver.Resolve(ArabicMovie(originalTitle: " X ", name: "X"), ArabicUser).Name;
+        Assert.Equal(" X ", padded);
+        Assert.Equal(3, padded!.Length);
+
+        AssertUntouched(resolver.Resolve(ArabicMovie(originalTitle: "X", name: "X"), ArabicUser));
+        AssertUntouched(resolver.Resolve(ArabicMovie(originalTitle: "   ", name: "X"), ArabicUser));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
