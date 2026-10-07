@@ -123,8 +123,9 @@ public sealed class EditorGuardFilterTests : IDisposable
     public void StoredNameAlreadyEqualToOriginal_IsUntouched_AndNothingIsRestored()
     {
         // Stored Name == OriginalTitle == MovieOriginal ("ar" enabled): the wrapper shows nothing different (Name == OriginalTitle), so
-        // there is no displayed swap and no real name to restore. This is also the shape of an item that is ALREADY swapped in the DB
-        // (blind spot): the guard cannot tell, and leaves it. The request keeps MovieOriginal and no restore is logged.
+        // there is no displayed swap and no real name to restore; the request keeps MovieOriginal and no restore is logged. (This is NOT
+        // the shape of an already-swapped item: a true swap has Name = Arabic and OriginalTitle = Latin, see
+        // RepairOfATrulySwappedItem_PostedOriginalTitleEqualsStoredName_IsKeptAsPosted.)
         var same = new Movie { Id = Guid.NewGuid(), Name = MovieOriginal, OriginalTitle = MovieOriginal, OriginalLanguage = "ar" };
         var movie = ArabicMovie();
         var filter = Build(out _, out var log, same, movie);
@@ -155,7 +156,8 @@ public sealed class EditorGuardFilterTests : IDisposable
         Assert.Equal(GermanOriginal, germanRequest.Name);
 
         // Companion: "fr" is enabled for FrenchUser only (not for ArabicUser). "At least one user" sees FrenchOriginal, so the same
-        // kind of request on the French movie is reverted to FrenchName. The requesting user plays no part (API keys have none).
+        // kind of request on the French movie is reverted to FrenchName. Here there is no session claim (the API-key shape), so every
+        // configured user is compared; a session request compares against its own user only (SessionUser_ComparesAgainstThatUsersViewOnly).
         var frenchRequest = new BaseItemDto { Name = FrenchOriginal };
         Run(filter, french.Id, frenchRequest);
         Assert.Equal(FrenchName, frenchRequest.Name);
@@ -235,6 +237,78 @@ public sealed class EditorGuardFilterTests : IDisposable
         Run(filter, movie.Id, typoFix);
         Assert.Equal(MovieName, typoFix.Name);
         Assert.Equal(FixedOriginal, typoFix.OriginalTitle);
+    }
+
+    [Fact]
+    public void PostedOriginalTitle_IsComparedToTheStoredNameOrdinally_ACaseVariantIsNotAnExplicitSwap()
+    {
+        // French movie ("fr" enabled for FrenchUser): stored Name "Amelie", OriginalTitle FrenchOriginal -> displayed FrenchOriginal.
+        // The editor posts Name = FrenchOriginal (as shown) and OriginalTitle = "AMELIE". Ordinal: "AMELIE" != "Amelie" (case differs),
+        // so this is NOT the explicit-swap signal and the stored Name goes back: "Amelie". An OrdinalIgnoreCase comparison would read it
+        // as a swap and keep Name = FrenchOriginal.
+        var french = new Movie { Id = Guid.NewGuid(), Name = FrenchName, OriginalTitle = FrenchOriginal, OriginalLanguage = "fr" };
+        var filter = Build(out _, out _, french);
+
+        var caseVariant = new BaseItemDto { Name = FrenchOriginal, OriginalTitle = "AMELIE" };
+        Run(filter, french.Id, caseVariant);
+        Assert.Equal(FrenchName, caseVariant.Name);
+        Assert.Equal("AMELIE", caseVariant.OriginalTitle);
+
+        // Presence companion: the exact stored Name ("Amelie" == "Amelie") IS the explicit-swap signal, so the same request is kept.
+        var exact = new BaseItemDto { Name = FrenchOriginal, OriginalTitle = FrenchName };
+        Run(filter, french.Id, exact);
+        Assert.Equal(FrenchOriginal, exact.Name);
+    }
+
+    [Fact]
+    public void EpisodeAndSeasonSaves_WhoseOwnOriginalTitleEqualsTheirStoredName_StillGetSeriesNameRestored()
+    {
+        // The explicit-swap exception (posted OriginalTitle == stored Name -> keep) belongs to the NAME path only: SeriesName is the
+        // series' title, never swapped through an episode/season save. Episode stored Name EpisodeName, season stored Name SeasonName;
+        // each posts OriginalTitle equal to its OWN stored Name plus the displayed SeriesOriginal as SeriesName. SeriesName must still be
+        // restored to the stored "Khottab Al Bab". A predicate leaked into the SeriesName path would keep SeriesOriginal.
+        var series = ArabicSeries();
+        var episode = new Episode { Id = Guid.NewGuid(), Name = EpisodeName, SeriesId = series.Id, SeriesName = SeriesName };
+        var season = new Season { Id = Guid.NewGuid(), Name = SeasonName, SeriesId = series.Id, SeriesName = SeriesName };
+        var filter = Build(out _, out _, series, episode, season);
+
+        var episodeRequest = new BaseItemDto { Name = EpisodeName, OriginalTitle = EpisodeName, SeriesName = SeriesOriginal };
+        Run(filter, episode.Id, episodeRequest);
+        Assert.Equal(SeriesName, episodeRequest.SeriesName);
+
+        var seasonRequest = new BaseItemDto { Name = SeasonName, OriginalTitle = SeasonName, SeriesName = SeriesOriginal };
+        Run(filter, season.Id, seasonRequest);
+        Assert.Equal(SeriesName, seasonRequest.SeriesName);
+
+        // Presence companion: the exception is live on the NAME path of the same filter (a movie whose posted OriginalTitle equals its
+        // stored Name keeps the posted Name), so the SeriesName restores above are not a filter that never keeps anything.
+        var movie = ArabicMovie();
+        var movieFilter = Build(out _, out _, movie);
+        var swap = new BaseItemDto { Name = MovieOriginal, OriginalTitle = MovieName };
+        Run(movieFilter, movie.Id, swap);
+        Assert.Equal(MovieOriginal, swap.Name);
+    }
+
+    [Fact]
+    public void SeriesNameComparison_IsOrdinal_ACaseVariantOfTheSeriesOriginalIsAGenuineEdit()
+    {
+        // French series ("fr" for FrenchUser): stored Name "The Show", OriginalTitle "La Serie Originale" -> an episode of it is shown
+        // SeriesName = "La Serie Originale". A posted SeriesName "LA SERIE ORIGINALE" differs in case only: ordinal -> not displayed to
+        // anybody -> a genuine edit, kept. An OrdinalIgnoreCase comparison would restore it to "The Show".
+        const string ShowName = "The Show";
+        const string ShowOriginal = "La Serie Originale";
+        var series = new Series { Id = Guid.NewGuid(), Name = ShowName, OriginalTitle = ShowOriginal, OriginalLanguage = "fr" };
+        var episode = new Episode { Id = Guid.NewGuid(), Name = EpisodeName, SeriesId = series.Id, SeriesName = ShowName };
+        var filter = Build(out _, out _, series, episode);
+
+        var caseVariant = new BaseItemDto { Name = EpisodeName, SeriesName = "LA SERIE ORIGINALE" };
+        Run(filter, episode.Id, caseVariant);
+        Assert.Equal("LA SERIE ORIGINALE", caseVariant.SeriesName);
+
+        // Presence companion: the exact displayed value on the same item is restored to the stored "The Show".
+        var exact = new BaseItemDto { Name = EpisodeName, SeriesName = ShowOriginal };
+        Run(filter, episode.Id, exact);
+        Assert.Equal(ShowName, exact.SeriesName);
     }
 
     [Fact]
