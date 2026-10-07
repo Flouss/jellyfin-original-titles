@@ -17,6 +17,10 @@ The plugin wraps `IDtoService`, so for users who enabled a language it changes t
 season inherits the series' language) is in that user's list. Every client that renders names from the API shows it. The display layer never
 writes stored data.
 
+`GET /Search/Hints` (the search box) builds its hints without `IDtoService`, so a global MVC action filter (`Api/SearchHintsFilter.cs`)
+applies the same decision there: hint `Name` for movies and series, hint `Series` for episodes and seasons. It resolves the user like the
+controller does (the `userId` query parameter, else the session's user); an API key without `userId` has no user and is never rewritten.
+
 Caveats:
 
 - **The wrapper changes only API-visible names.** Sort order stays on the translated title (`SortName`/`CleanName` are not touched), so an
