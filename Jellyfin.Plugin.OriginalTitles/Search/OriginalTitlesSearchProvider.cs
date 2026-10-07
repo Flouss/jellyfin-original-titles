@@ -97,8 +97,25 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
     public int Priority => 50;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Never throws: the manager calls this OUTSIDE any try/catch (SearchManager v12.2 :273 filters the provider list before its
+    /// per-provider try at :306), so a throw would fail every search for every user. A failure declines (false) and is logged once at
+    /// warning level, later ones at debug.
+    /// </remarks>
     public bool CanSearch(SearchProviderQuery query)
-        => query?.UserId is { } userId && userId != Guid.Empty && _settings.GetConfiguredUserIds().Contains(userId);
+    {
+        try
+        {
+            return query?.UserId is { } userId && userId != Guid.Empty && _settings.GetConfiguredUserIds().Contains(userId);
+        }
+#pragma warning disable CA1031 // Fail open: CanSearch runs outside the manager's per-provider try; a throw would break every search.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogFailure(ex, "Original Titles could not decide whether to search; declining");
+            return false;
+        }
+    }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<SearchResult> SearchAsync(
@@ -138,16 +155,20 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
         }
         catch (Exception ex)
         {
-            if (Interlocked.Increment(ref _failuresLogged) == 1)
-            {
-                _logger.LogWarning(ex, "Original Titles search failed; returning no results (later failures are logged at debug level)");
-            }
-            else
-            {
-                _logger.LogDebug(ex, "Original Titles search failed again; returning no results");
-            }
-
+            LogFailure(ex, "Original Titles search failed; returning no results");
             return Array.Empty<SearchResult>();
+        }
+    }
+
+    private void LogFailure(Exception ex, string what)
+    {
+        if (Interlocked.Increment(ref _failuresLogged) == 1)
+        {
+            _logger.LogWarning(ex, "{What} (later failures are logged at debug level)", what);
+        }
+        else
+        {
+            _logger.LogDebug(ex, "{What} (again)", what);
         }
     }
 

@@ -195,6 +195,25 @@ public class OriginalTitlesSearchProviderTests
     }
 
     [Fact]
+    public async Task CanSearch_NeverThrows_WhenTheSettingsThrow_AndTheSearchAddsNothing()
+    {
+        // The manager calls CanSearch OUTSIDE any try/catch (SearchManager v12.2 :273, before the per-provider try at :306): a throw
+        // there would fail every search for every user. A settings fake that violates its never-throws contract -> false, no throw,
+        // and SearchAsync (which calls CanSearch inside its own fail-open) returns nothing too.
+        // Presence companion: the same fixture with working settings -> true for UserAr and a real hit, so false is not a constant.
+        var f = new Fixture();
+        f.AddVisible(Movie(IdA1), UserAr);
+
+        f.Settings.ThrowOnConfiguredUserIds = true;
+        Assert.False(f.Provider.CanSearch(Query(UserAr)));
+        Assert.Empty(await f.Search(Query(UserAr)));
+
+        f.Settings.ThrowOnConfiguredUserIds = false;
+        Assert.True(f.Provider.CanSearch(Query(UserAr)));
+        Assert.Equal(new[] { (IdA1, Romanised) }, await f.Search(Query(UserAr)));
+    }
+
+    [Fact]
     public async Task UserWithoutAnyEnabledLanguage_CannotSearch_NoScanNoLanguageGateCalls()
     {
         // UserNoLanguage has no settings entry: the provider declines up front, so the index is never scanned. A scan asks the
@@ -324,7 +343,11 @@ public class OriginalTitlesSearchProviderTests
             return _inner.IsEnabled(userId, languageCode);
         }
 
-        public IReadOnlyList<Guid> GetConfiguredUserIds() => _inner.GetConfiguredUserIds();
+        /// <summary>Gets or sets a value indicating whether <see cref="GetConfiguredUserIds"/> throws (the interface promises it never does).</summary>
+        public bool ThrowOnConfiguredUserIds { get; set; }
+
+        public IReadOnlyList<Guid> GetConfiguredUserIds()
+            => ThrowOnConfiguredUserIds ? throw new InvalidOperationException("settings unreadable (fake)") : _inner.GetConfiguredUserIds();
     }
 
     private sealed class Fixture
