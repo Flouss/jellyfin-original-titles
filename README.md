@@ -9,3 +9,155 @@ API spike findings that later work relies on: [docs/spike.md](docs/spike.md).
     dotnet test
 
 Targets `net10.0`, `Jellyfin.Controller` / `Jellyfin.Model` 12.2.0.
+
+## What it does and what it does not
+
+The plugin wraps `IDtoService`, so for users who enabled a language it changes the **API-visible** names: the `Name` of movies and series
+(and `SeriesName` on seasons and episodes) is replaced by the item's `OriginalTitle` when the item's original language (an episode or
+season inherits the series' language) is in that user's list. Every client that renders names from the API shows it. The display layer never
+writes stored data.
+
+Caveats:
+
+- **The wrapper changes only API-visible names.** Sort order stays on the translated title (`SortName`/`CleanName` are not touched), so an
+  Arabic-titled movie sorts where its Latin name sorts.
+- **Webhook, Playback Reporting and Jellyseerr keep the translated title.** They read the item server-side, not through the wrapped DTO.
+- Episode and season titles are never changed, only `SeriesName`.
+- Language codes are two-letter ISO 639-1 (`ar`, `fr`) as stored in `OriginalLanguage`; the settings page trims and lowercases.
+
+### Editor-guard blind spots
+
+When an admin saves an item in the metadata editor, a client may post the *swapped* name back. The editor guard restores the cached real
+`Name`. It does **not** cover:
+
+- edits made while the plugin is disabled (nothing is cached or restored);
+- writers that bypass `ItemUpdated` (direct DB edits, scripts or plugins that persist without the event);
+- items whose translated `Name` equals the original title (nothing to restore, nothing to detect);
+- items first seen **already swapped** (no real `Name` was ever cached, so there is nothing to restore).
+
+### Switching it off
+
+Clear the user's language list on the plugin page, or uninstall the plugin. The display layer never changes stored data, so there is nothing
+to clean up. The only write the plugin ever makes is the guard restoring a previously cached real value.
+
+## Local harness
+
+A throwaway Jellyfin **12.2** server with the plugin loaded as a manual plugin, hot-reloading on every build. It contacts no other server: no
+metadata providers are enabled and everything binds to `127.0.0.1:18096`.
+
+Requirements: Docker with Compose 2.30+ (tested with Compose 5.5), the .NET 10 SDK, PowerShell (`pwsh` or Windows PowerShell 5.1).
+`ffmpeg` on the PATH is optional; without it `seed.ps1` uses the ffmpeg inside the Jellyfin image.
+
+### Start
+
+    dotnet build
+    docker compose -f docker-compose.debug.yml watch     # leave running: this is the hot-reload loop
+    pwsh scripts/harness/seed.ps1                        # second terminal, once the server is up
+
+`watch` starts the container if needed. On first start the entrypoint waits up to 40 s for the synced build output before Jellyfin boots.
+Check that `GET /Plugins` (below) lists `Original Titles` as `Active`.
+
+`seed.ps1` is idempotent. It generates 3 tiny videos under `scripts/harness/media/` (gitignored), completes the startup wizard with the
+throwaway admin `harness-admin`, writes the password, API key and user id to `.env.local` (gitignored, never commit it), creates the libraries
+`Movies` (`/media/Movies`) and `Shows` (`/media/Shows`) without metadata fetchers, waits for the scan and sets the fixture titles:
+
+| Item | Name | OriginalTitle | OriginalLanguage |
+|---|---|---|---|
+| Movie | `Mouch Fi Thniti` | `موش في ثنيتي` | `ar` |
+| Series | `Harness Show` | `برنامج الاختبار` | `ar` |
+| Episode 1 | `Pilot` | none | none (inherits `ar` from the series) |
+| Episode 2 | `Harness Show S01E02` (from the file name) | none | none |
+
+`pwsh scripts/harness/items.ps1` lists every item as the API returns it (`-UserId <id>` looks through another user, `-AsJson` gives raw JSON).
+Web UI: <http://127.0.0.1:18096> (log in as `harness-admin`, password in `.env.local`).
+
+### Rebuild and hot-reload
+
+Jellyfin cannot load or replace a plugin in a running server, so every change is a **restart**. The `sync+restart` watch rules copy
+`Jellyfin.Plugin.OriginalTitles/bin/Debug/net10.0` and `scripts/harness/meta.json` into `/plugin-staging` in the container and restart it; the
+entrypoint then copies staging into `/config/data/plugins/Original Titles_0.1.0.0/` *before* Jellyfin starts. Watch never writes into the plugin
+directory itself, because overwriting the DLL of a running or stopping Jellyfin corrupts the loaded assembly. The library, users and settings
+survive restarts in the `jf-config` volume.
+
+Two ways to trigger a reload:
+
+    dotnet build                                                  # once per change, from the repo root
+    cd Jellyfin.Plugin.OriginalTitles && dotnet watch build       # rebuilds on every source save
+
+Run `dotnet watch build` from inside the project folder: with SDK 10.0.103, `dotnet watch --project ... build` fails with `MSB1001`.
+
+If you bump the plugin version, change it in three places: `AssemblyVersion` in the csproj, `version` in `scripts/harness/meta.json`, and
+`PLUGIN_DIR` (`Original Titles_<version>`) in `docker-compose.debug.yml`.
+
+### Read the Jellyfin log
+
+    docker compose -f docker-compose.debug.yml logs -f jellyfin
+    docker exec jf-original-titles-harness sh -c 'tail -n 200 /config/log/log_*.log'
+    docker logs jf-original-titles-harness 2>&1 | grep -E "Loaded (assembly|plugin: Original)"
+
+A `BadImageFormatException` on plugin load means the DLL was replaced while the server ran or stopped: restart once more.
+
+### Verify the title wrapper manually
+
+All calls use the API key from `.env.local`. On 12.x the header is `Authorization: MediaBrowser Token="<key>"`. In bash:
+
+    set -a; . ./.env.local; set +a
+    H="Authorization: MediaBrowser Token=\"$API_KEY\""
+    B=$BASE_URL
+    curl -s -H "$H" "$B/Plugins"                       # 'Original Titles' must be Active
+    curl -s -H "$H" "$B/Users"                         # user ids
+    # a control user whose language list stays empty
+    curl -s -X POST -H "$H" -H 'Content-Type: application/json' -d '{"Name":"harness-user","Password":"x"}' "$B/Users/New"
+
+Enable `ar` for `harness-admin` only (Dashboard, Plugins, Original Titles, per-user list; the same data is at
+`GET`/`POST /Plugins/7c1e5a3d-92b4-4f6e-8d0a-3b5f1c2e9a47/Configuration`). Then run the calls below for the enabled user and for the control.
+Expected for the enabled user: `Name` is the Arabic `OriginalTitle` for the movie and the series, `SeriesName` on the season and both
+episodes is the Arabic series title, episode `Name` is unchanged. Expected for the control: everything translated, as stored.
+
+    # grid / lists
+    curl -s -H "$H" "$B/Users/<uid>/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=OriginalTitle,OriginalLanguage"
+    # details (episode shows SeriesName)
+    curl -s -H "$H" "$B/Users/<uid>/Items/<movieId>"
+    curl -s -H "$H" "$B/Users/<uid>/Items/<episodeId>"
+    # latest, resume, next up
+    curl -s -H "$H" "$B/Users/<uid>/Items/Latest?IncludeItemTypes=Movie,Episode"
+    curl -s -H "$H" "$B/UserItems/Resume?userId=<uid>"
+    curl -s -H "$H" "$B/Shows/NextUp?userId=<uid>"
+    # hints (search box)
+    curl -s -H "$H" "$B/Search/Hints?searchTerm=Mouch&userId=<uid>"
+    # stored data must be unchanged: the same item through the control user
+    curl -s -H "$H" "$B/Users/<controlUid>/Items/<movieId>"
+
+`GET /Items/{id}` returns 400 without a user, so always use `/Users/{uid}/Items/{id}`. In PowerShell send
+`@{Authorization = "MediaBrowser Token=`"$key`""}` and set `[Console]::OutputEncoding = [Text.Encoding]::UTF8`, otherwise Arabic prints as `?`.
+
+### What `POST /Items/{id}` can set (Jellyfin v12.2, verified on the harness)
+
+`ItemUpdateController.UpdateItem` copies the posted `BaseItemDto` onto the item **unconditionally**, so a field missing from the body is written
+as null. Always `GET /Users/{uid}/Items/{id}`, change fields, drop `Trickplay` and post the whole object back (as `seed.ps1` does).
+
+| Field | Settable? | Behaviour (measured) |
+|---|---|---|
+| `Name` | yes | Copied as-is. Omitted or null leaves the item with an **empty** `Name`. |
+| `OriginalTitle` | yes | Empty or whitespace-only becomes null; otherwise stored verbatim (Arabic round-trips). |
+| `OriginalLanguage` | yes | Normalised by `LocalizationManager`: `ar`, `AR`, `ara`, `Arabic` all become `ar`. Unknown (`xx`) and padded (`" ar "`, stored with the spaces) values are stored raw; empty becomes null. Also settable on episodes and seasons, where it overrides the series; an empty string does not fall back to the series (see `docs/spike.md`). |
+| `SeriesName` (episode, season) | derived, do not set | Renaming a series through `Name` cascades to its seasons and episodes. |
+
+The values survived `POST /Library/Refresh` on the harness, which has no metadata fetchers. A real provider (TMDb) refresh may overwrite
+`Name`, `OriginalTitle` and `OriginalLanguage`; that is not exercised here.
+
+Gotchas: posting a fetched item back can return 500 because of the `Trickplay` key. It did not reproduce on the fixtures (no trickplay data), but
+`seed.ps1` drops the key anyway. `GET /Items/{id}` without a user is a reproduced 400.
+
+### Stop and clean up
+
+    docker compose -f docker-compose.debug.yml down -v     # also deletes the config and cache volumes: users, libraries and the API key are gone
+    rm .env.local                                          # its credentials are now stale
+
+`docker-compose.debug.yml` and `scripts/harness/*` stay. `scripts/harness/media/` (generated videos) is gitignored and can be deleted.
+
+### Differences from other Jellyfin images
+
+The harness uses the official `jellyfin/jellyfin:12.2` image, which reports `Jellyfin.Server 12.2.0.0` (no `12.2.0` tag exists; `12.2` floats to
+the newest 12.2 build). `linuxserver/jellyfin` is not used here. The plugin path is the same, `/config/data/plugins/`, because the harness sets
+`JELLYFIN_DATA_DIR=/config/data` (the official image defaults to `/config/plugins`).

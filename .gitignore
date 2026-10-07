@@ -27,3 +27,8 @@ appsettings.local.json
 .DS_Store
 Thumbs.db
 *.log
+
+# Local harness (generated fixtures and credentials, never commit)
+.env.local
+scripts/harness/media/
+scripts/harness/*.local.*

@@ -1,0 +1,18 @@
+{
+  "category": "General",
+  "changelog": "Local harness build",
+  "description": "Displays movies and series under their original-language title, per user.",
+  "guid": "7c1e5a3d-92b4-4f6e-8d0a-3b5f1c2e9a47",
+  "name": "Original Titles",
+  "overview": "Original-language titles per user",
+  "owner": "local",
+  "targetAbi": "12.2.0.0",
+  "timestamp": "2026-10-07T00:00:00.0000000Z",
+  "version": "0.1.0.0",
+  "status": "Active",
+  "autoUpdate": false,
+  "imagePath": "",
+  "assemblies": [
+    "Jellyfin.Plugin.OriginalTitles.dll"
+  ]
+}
