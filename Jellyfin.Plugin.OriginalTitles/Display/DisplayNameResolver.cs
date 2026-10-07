@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Jellyfin.Plugin.OriginalTitles.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
@@ -30,6 +31,15 @@ public class DisplayNameResolver
     {
         _settings = settings;
     }
+
+    /// <summary>
+    /// Gets whether <paramref name="userId"/> has a settings entry at all. A user without one has no language enabled, so
+    /// <see cref="Resolve"/> can only return nulls for them; callers use this to skip the per-item work (an episode lookup reads
+    /// its series from the library). Throws only if the settings implementation breaks its never-throws contract.
+    /// </summary>
+    /// <param name="userId">The requesting user.</param>
+    /// <returns>True when the user has a settings entry (whatever its languages).</returns>
+    public bool HasSettingsEntry(Guid userId) => _settings.GetConfiguredUserIds().Contains(userId);
 
     /// <summary>
     /// Decides the replacement names for <paramref name="item"/> as seen by <paramref name="userId"/>.

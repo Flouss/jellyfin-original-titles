@@ -17,6 +17,7 @@ namespace Jellyfin.Plugin.OriginalTitles.Display;
 /// Invariants: never writes to a <see cref="BaseItem"/> (only to the DTOs core just built for this call); a null user is never
 /// rewritten; fail open: a failure while deciding one item leaves that DTO exactly as core built it, the others are still
 /// rewritten, nothing escapes, and each exception type is logged once at Warning (afterwards at Debug).
+/// A user with no settings entry is skipped with ONE check per call (no per-item resolving); a failing check also leaves the DTOs as core built them.
 /// Not covered by fail-open: exceptions thrown by the inner (core) service propagate unchanged, exactly as without the plugin.
 /// Batch DTOs are matched to items by <c>Id</c> (core sets <c>dto.Id = item.Id</c>), never by position: core drops items the
 /// user cannot see, so the output can be shorter than the input.
@@ -48,7 +49,7 @@ public class OriginalTitleDtoService : IDtoService
     public BaseItemDto GetBaseItemDto(BaseItem item, DtoOptions options, User? user = null, BaseItem? owner = null)
     {
         var dto = _inner.GetBaseItemDto(item, options, user, owner);
-        if (user is not null)
+        if (user is not null && !HasNothingToDo(user.Id))
         {
             Rewrite(item, dto, user.Id);
         }
@@ -60,7 +61,7 @@ public class OriginalTitleDtoService : IDtoService
     public IReadOnlyList<BaseItemDto> GetBaseItemDtos(IReadOnlyList<BaseItem> items, DtoOptions options, User? user = null, BaseItem? owner = null, bool skipVisibilityCheck = false)
     {
         var dtos = _inner.GetBaseItemDtos(items, options, user, owner, skipVisibilityCheck);
-        if (user is null || dtos is null || dtos.Count == 0)
+        if (user is null || dtos is null || dtos.Count == 0 || HasNothingToDo(user.Id))
         {
             return dtos!;
         }
@@ -100,6 +101,26 @@ public class OriginalTitleDtoService : IDtoService
     /// <inheritdoc />
     public BaseItemDto GetItemByNameDto(BaseItem item, DtoOptions options, List<BaseItem>? taggedItems, User? user = null)
         => _inner.GetItemByNameDto(item, options, taggedItems, user);
+
+    /// <summary>
+    /// One check per call: true when the user has no settings entry (nothing is enabled for them, so no DTO can change and resolving
+    /// each item, which reads an episode's series from the library, is wasted work), or when that check itself failed (fail open: the
+    /// DTOs stay as core built them).
+    /// </summary>
+    private bool HasNothingToDo(Guid userId)
+    {
+        try
+        {
+            return !_resolver.HasSettingsEntry(userId);
+        }
+#pragma warning disable CA1031 // Fail open: never break browsing.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogFailure(ex, Guid.Empty);
+            return true;
+        }
+    }
 
     private void Rewrite(BaseItem item, BaseItemDto? dto, Guid userId)
     {

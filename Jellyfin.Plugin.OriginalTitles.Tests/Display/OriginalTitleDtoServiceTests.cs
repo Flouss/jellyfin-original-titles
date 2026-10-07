@@ -38,6 +38,9 @@ public sealed class OriginalTitleDtoServiceTests : IDisposable
     private static readonly Guid ArabicUser = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid FrenchUser = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
+    // Has no settings entry at all (the fixture config lists ArabicUser, FrenchUser and Guid.Empty only).
+    private static readonly Guid StrangerUser = Guid.Parse("33333333-3333-3333-3333-333333333333");
+
     public OriginalTitleDtoServiceTests()
     {
         BaseItem.LibraryManager = null!;
@@ -154,6 +157,63 @@ public sealed class OriginalTitleDtoServiceTests : IDisposable
         // Stored data unchanged.
         Assert.Equal(SeriesName, episode.SeriesName);
         Assert.Equal(EpisodeName, episode.Name);
+    }
+
+    [Fact]
+    public void UserWithoutASettingsEntry_IsShortCircuited_NoSeriesLookup_OutputIdenticalToTheInnersDto()
+    {
+        // Episode of the Arabic series. Resolving it reads episode.Series = ONE library GetItemById(SeriesId) per call (docs/spike.md (c),
+        // SearchHintsFilterTests expects the same 1). StrangerUser has no settings entry, so nothing can change for them: both DTO
+        // methods must return the inner's DTO untouched (SeriesName "Khottab Al Bab") with ZERO library lookups.
+        // Presence companion: ArabicUser (entry "ar") on the same episode IS rewritten to SeriesOriginal and costs exactly 1 lookup per
+        // call: after GetBaseItemDto 1, after GetBaseItemDtos 2 (so a counter stuck at 0 is not what the first half observed).
+        var series = ArabicSeries();
+        var library = FakeLibraryManager.Create(series);
+        BaseItem.LibraryManager = library;
+        var episode = new Episode { Id = Guid.NewGuid(), Name = EpisodeName, SeriesName = SeriesName, SeriesId = series.Id };
+        var (service, inner, log) = Build();
+
+        var single = service.GetBaseItemDto(episode, new DtoOptions(), UserWithId(StrangerUser));
+        Assert.Same(inner.LastDto, single);
+        Assert.Equal(SeriesName, single.SeriesName);
+        Assert.Equal(EpisodeName, single.Name);
+
+        var batch = service.GetBaseItemDtos(new BaseItem[] { episode }, new DtoOptions(), UserWithId(StrangerUser));
+        Assert.Same(inner.LastDtos, batch);
+        Assert.Equal(SeriesName, batch.Single().SeriesName);
+        Assert.Equal(0, FakeLibraryManager.GetItemByIdCalls(library));
+
+        Assert.Equal(SeriesOriginal, service.GetBaseItemDto(episode, new DtoOptions(), UserWithId(ArabicUser)).SeriesName);
+        Assert.Equal(1, FakeLibraryManager.GetItemByIdCalls(library));
+        Assert.Equal(SeriesOriginal, service.GetBaseItemDtos(new BaseItem[] { episode }, new DtoOptions(), UserWithId(ArabicUser)).Single().SeriesName);
+        Assert.Equal(2, FakeLibraryManager.GetItemByIdCalls(library));
+        Assert.Empty(log.Warnings);
+    }
+
+    [Fact]
+    public void SettingsLookupFailure_FailsOpen_DtoUntouched_LoggedAsWarning_NothingEscapes()
+    {
+        // The short-circuit reads GetConfiguredUserIds, which promises never to throw; if an implementation breaks that, the DTO methods
+        // must still return core's DTO unchanged (as without the plugin), log one Warning, and not throw.
+        // Presence companion: the same movie/user with working settings is rewritten.
+        var movie = ArabicMovie();
+        var log = new CapturingLogger();
+        var broken = new OriginalTitleDtoService(new FakeCoreDtoService(), new DisplayNameResolver(new ThrowingSettings()), log);
+
+        Assert.Equal(MovieName, broken.GetBaseItemDto(movie, new DtoOptions(), UserWithId(ArabicUser)).Name);
+        Assert.Equal(MovieName, broken.GetBaseItemDtos(new BaseItem[] { movie }, new DtoOptions(), UserWithId(ArabicUser)).Single().Name);
+        Assert.Equal(2, log.Warnings.Count + log.Debugs.Count);
+        Assert.Single(log.Warnings);
+
+        var (working, _, _) = Build();
+        Assert.Equal(MovieOriginal, working.GetBaseItemDto(movie, new DtoOptions(), UserWithId(ArabicUser)).Name);
+    }
+
+    private sealed class ThrowingSettings : IUserLanguageSettings
+    {
+        public bool IsEnabled(Guid userId, string? languageCode) => true;
+
+        public IReadOnlyList<Guid> GetConfiguredUserIds() => throw new InvalidOperationException("settings unreadable (fake)");
     }
 
     [Fact]
