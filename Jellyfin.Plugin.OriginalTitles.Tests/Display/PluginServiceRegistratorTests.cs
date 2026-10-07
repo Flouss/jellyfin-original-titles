@@ -72,7 +72,7 @@ public class PluginServiceRegistratorTests
     }
 
     [Fact]
-    public void Decorator_RewritesThroughTheRealPluginServices_WithNoPluginInstance()
+    public void Decorator_ResolvesWithNoPluginInstance_AndEnablesNothing()
     {
         // Plugin.Instance is null in unit tests, so nobody has a language enabled and the stand-in's DTO comes back untouched
         // ("Mouch Fi Thniti"); resolution must not throw. Two layers guard this (the registrator's null-safe provider and
