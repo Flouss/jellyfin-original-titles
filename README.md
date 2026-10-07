@@ -12,14 +12,21 @@ Targets `net10.0`, `Jellyfin.Controller` / `Jellyfin.Model` 12.2.0.
 
 ## What it does and what it does not
 
-The plugin wraps `IDtoService`, so for users who enabled a language it changes the **API-visible** names: the `Name` of movies and series
+The plugin has four parts. Each manual check below names the part it needs: **wrapper** (`Display/`), **hints filter** (`Api/`),
+**search provider** (`Search/`) and **editor guard** (`Guard/`).
+
+**Wrapper.** The plugin wraps `IDtoService`, so for users who enabled a language it changes the **API-visible** names: the `Name` of movies and series
 (and `SeriesName` on seasons and episodes) is replaced by the item's `OriginalTitle` when the item's original language (an episode or
 season inherits the series' language) is in that user's list. Every client that renders names from the API shows it. The display layer never
 writes stored data.
 
-`GET /Search/Hints` (the search box) builds its hints without `IDtoService`, so a global MVC action filter (`Api/SearchHintsFilter.cs`)
+**Hints filter.** `GET /Search/Hints` (the search box) builds its hints without `IDtoService`, so a global MVC action filter (`Api/SearchHintsFilter.cs`)
 applies the same decision there: hint `Name` for movies and series, hint `Series` for episodes and seasons. It resolves the user like the
 controller does (the `userId` query parameter, else the session's user); an API key without `userId` has no user and is never rewritten.
+
+**Search provider.** `Search/OriginalTitlesSearchProvider.cs` finds movies and series by a romanised (Arabizi or Latin) spelling of their
+original title, for users who enabled that language. When it has a romanised hit it also returns the server's own database matches (the search
+manager would otherwise drop them); with no romanised hit it returns nothing and search behaves as without the plugin.
 
 Caveats:
 
@@ -65,10 +72,10 @@ to clean up. The plugin never writes stored data itself: the editor guard only p
 
 ## Local harness
 
-A throwaway Jellyfin **12.2** server with the plugin loaded as a manual plugin, hot-reloading on every build. It contacts no other server: no
-metadata providers are enabled and everything binds to `127.0.0.1:18096`.
+A throwaway Jellyfin **12.2** server with the plugin loaded as a manual plugin, hot-reloading on every build. No metadata providers are
+enabled and no real library server is contacted; everything binds to `127.0.0.1:18096`.
 
-Requirements: Docker with Compose 2.30+ (tested with Compose 5.5), the .NET 10 SDK, PowerShell (`pwsh` or Windows PowerShell 5.1).
+Requirements: Docker with Compose 5.5 (the only version tested; older ones are untested, not known to fail), the .NET 10 SDK, PowerShell (`pwsh` or Windows PowerShell 5.1).
 `ffmpeg` on the PATH is optional; without it `seed.ps1` uses the ffmpeg inside the Jellyfin image.
 
 ### Start
@@ -120,7 +127,11 @@ If you bump the plugin version, change it in three places: `AssemblyVersion` in 
 
 A `BadImageFormatException` on plugin load means the DLL was replaced while the server ran or stopped: restart once more.
 
-### Verify the title wrapper manually
+### Verify the features manually
+
+Which check needs which part: the item lists and details, latest/resume/next up, and the stored-data comparison need the **wrapper**; the
+`Search/Hints` call needs the **hints filter**; the editor-guard script needs the **editor guard**. The **search provider** has no scripted
+harness check yet (unit tests only).
 
 All calls use the API key from `.env.local`. On 12.x the header is `Authorization: MediaBrowser Token="<key>"`. In bash:
 
@@ -129,29 +140,32 @@ All calls use the API key from `.env.local`. On 12.x the header is `Authorizatio
     B=$BASE_URL
     curl -s -H "$H" "$B/Plugins"                       # 'Original Titles' must be Active
     curl -s -H "$H" "$B/Users"                         # user ids
-    # a control user whose language list stays empty
-    curl -s -X POST -H "$H" -H 'Content-Type: application/json' -d '{"Name":"harness-user","Password":"x"}' "$B/Users/New"
+    # a control user whose language list stays empty (random password, kept in .env.local, never printed;
+    # `pwsh scripts/harness/editor-guard.ps1` creates the same user the same way)
+    CP=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')
+    echo "CONTROL_PASSWORD=$CP" >> .env.local
+    curl -s -X POST -H "$H" -H 'Content-Type: application/json' -d "{\"Name\":\"harness-user\",\"Password\":\"$CP\"}" "$B/Users/New"
 
 Enable `ar` for `harness-admin` only (Dashboard, Plugins, Original Titles, per-user list; the same data is at
 `GET`/`POST /Plugins/7c1e5a3d-92b4-4f6e-8d0a-3b5f1c2e9a47/Configuration`). Then run the calls below for the enabled user and for the control.
 Expected for the enabled user: `Name` is the Arabic `OriginalTitle` for the movie and the series, `SeriesName` on the season and both
 episodes is the Arabic series title, episode `Name` is unchanged. Expected for the control: everything translated, as stored.
 
-    # grid / lists
+    # grid / lists (wrapper)
     curl -s -H "$H" "$B/Users/<uid>/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=OriginalTitle,OriginalLanguage"
-    # details (episode shows SeriesName)
+    # details (wrapper; the episode shows SeriesName)
     curl -s -H "$H" "$B/Users/<uid>/Items/<movieId>"
     curl -s -H "$H" "$B/Users/<uid>/Items/<episodeId>"
-    # latest, resume, next up
+    # latest, resume, next up (wrapper)
     curl -s -H "$H" "$B/Users/<uid>/Items/Latest?IncludeItemTypes=Movie,Episode"
     curl -s -H "$H" "$B/UserItems/Resume?userId=<uid>"
     curl -s -H "$H" "$B/Shows/NextUp?userId=<uid>"
-    # hints (search box)
+    # hints (search box; hints filter)
     curl -s -H "$H" "$B/Search/Hints?searchTerm=Mouch&userId=<uid>"
-    # stored data must be unchanged: the same item through the control user
+    # stored data must be unchanged: the same item through the control user (wrapper does not write)
     curl -s -H "$H" "$B/Users/<controlUid>/Items/<movieId>"
 
-Editor guard: `pwsh scripts/harness/editor-guard.ps1` enables `ar` for `harness-admin` only, posts every displayed fixture item back
+Editor guard (needs the **editor guard**): `pwsh scripts/harness/editor-guard.ps1` enables `ar` for `harness-admin` only, posts every displayed fixture item back
 unchanged (API key and admin session), reads the stored values through the control user and must end with `FAILS=0`. Run it after
 every Jellyfin upgrade: a renamed controller or action silently disables the guard.
 
