@@ -104,3 +104,32 @@ Mirrors another Jellyfin plugin scaffold: same csproj properties (`net10.0`, nul
 Differences from that scaffold: the `Plugin` ctor takes only `IApplicationPaths` + `IXmlSerializer` (no `IServerApplicationHost`);
 the solution is a classic `.sln` (SDK 10 defaults to `.slnx`). Test project: xunit 2.x on `net10.0`.
 `dotnet build`: 0 warnings, 0 errors. `dotnet test`: 1 passed (mutation-proofed: removing the `EmbeddedResource` item fails it).
+
+## Task 6 spike: what the server's transliterator really emits (2026-10-07)
+
+Source read (v12.2): `BaseItem.GetSortName(string, bool, ServerConfiguration)` (`BaseItem.cs` 992) lower-cases, applies the
+`ServerConfiguration` remove-word/remove-char/replace-char lists (defaults: words `the|a|an`, remove chars `, & - { } '`, replace chars `. + %`),
+zero-pads every digit run to 10 digits (`ModifySortChunks`), runs `RemoveDiacritics`, and only if the result is not pure ASCII calls
+`string.Transliterated()` (`src/Jellyfin.Extensions/StringExtensions.cs`: ICU `Any-Latin; Latin-Ascii; Lower; NFD; [:Nonspacing Mark:] Remove; [:Punctuation:] Remove;`,
+overridable via `JELLYFIN_TRANSLITERATOR_ID`).
+
+**ICU runs outside the server.** A throwaway console project (outside the repo, same `Jellyfin.Controller`/`Jellyfin.Model` 12.2.0 references; ICU
+arrives transitively through `Jellyfin.Extensions`) called the real `BaseItem.GetSortName(name, true, new ServerConfiguration())` and `name.Transliterated()`.
+Observed, verbatim (input -> output):
+
+| Input | `GetSortName(name, true, new ServerConfiguration())` | `name.Transliterated()` |
+|---|---|---|
+| `الخطاب على الباب` | `alkhtab ʿly albab` | identical |
+| `موش في ثنيتي` | `mwsh fy thnyty` (matches a SortName seen on a real server) | identical |
+| `الشيخ غانم` | `alshykh ghanm` | identical |
+| `الخطاب-على` (hyphen) | `alkhtabʿly` (hyphen removed, words fused) | identical |
+| `ء أ عين` | `ʾ a ʿyn` | identical |
+| `عمر 7` | `ʿmr 0000000007` (digit run zero-padded) | `ʿmr 7` |
+| `Al-Khattab, the 'Door'!` | not run | `alkhattab the door` (punctuation removed) |
+
+Non-ASCII characters that survive Latin-Ascii: ayn is **U+02BF MODIFIER LETTER LEFT HALF RING** (`ʿ`), hamza is **U+02BE MODIFIER LETTER RIGHT HALF RING** (`ʾ`).
+Neither is removed by `[:Punctuation:] Remove` (they are modifier letters), so they stay inside the word (`ʿly`). They look like apostrophes; use the escapes.
+
+Consequences used by Task 6: (1) the definite article arrives glued to the word (`alkhtab`, `albab`), never as `al-`, so `al`/`el` must be stripped without a hyphen;
+(2) the transliterated title contains ʿ/ʾ, the letters Arabizi writes `3`/`2`, which the rules already drop; (3) `GetSortName` pads digits and removes hyphens, `Transliterated()` does neither,
+so the plugin's index uses `Transliterated()` directly (identical output on all Arabic samples above, no zero-padding that would break the `7`->`h` mapping).
