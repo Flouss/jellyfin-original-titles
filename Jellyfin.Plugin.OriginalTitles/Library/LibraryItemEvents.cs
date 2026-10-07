@@ -6,8 +6,9 @@ namespace Jellyfin.Plugin.OriginalTitles.Library;
 
 /// <summary>
 /// The plugin's ONE subscription to <see cref="ILibraryManager"/>'s <c>ItemAdded</c>/<c>ItemUpdated</c>/<c>ItemRemoved</c> events
-/// (ruling R3). Plugin consumers (the search title index; later the editor guard) subscribe here instead of to the library manager,
-/// so the plugin never holds duplicate core subscriptions. Register as a singleton (see
+/// (ruling R3). Plugin consumers (today the search title index) subscribe here instead of to the library manager,
+/// so the plugin never holds duplicate core subscriptions. The editor guard is not a consumer: since ruling R13 it is an MVC action filter
+/// and uses no library events. Register as a singleton (see
 /// <c>Search.SearchServiceCollectionExtensions.AddOriginalTitlesSearch</c>).
 /// </summary>
 /// <remarks>

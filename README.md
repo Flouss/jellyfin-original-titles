@@ -15,10 +15,10 @@ Targets `net10.0`, `Jellyfin.Controller` / `Jellyfin.Model` 12.2.0.
 The plugin has four parts. Each manual check below names the part it needs: **wrapper** (`Display/`), **hints filter** (`Api/`),
 **search provider** (`Search/`) and **editor guard** (`Guard/`).
 
-**Wrapper.** The plugin wraps `IDtoService`, so for users who enabled a language it changes the **API-visible** names: the `Name` of movies and series
-(and `SeriesName` on seasons and episodes) is replaced by the item's `OriginalTitle` when the item's original language (an episode or
-season inherits the series' language) is in that user's list. Every client that renders names from the API shows it. The display layer never
-writes stored data.
+**Wrapper.** The plugin wraps `IDtoService`, so for users who enabled a language it changes the **API-visible** names: the `Name` of movies and series is
+replaced by the item's `OriginalTitle` when the item's original language is in that user's list. For episodes and seasons only `SeriesName`
+changes, and it is decided from the **series'** own `OriginalTitle` and original language, ignoring the episode's or season's own language.
+Every client's browsing, search and detail screens that render names from the API show it. The display layer never writes stored data.
 
 **Hints filter.** `GET /Search/Hints` (the search box) builds its hints without `IDtoService`, so a global MVC action filter (`Api/SearchHintsFilter.cs`)
 applies the same decision there: hint `Name` for movies and series, hint `Series` for episodes and seasons. It resolves the user like the
@@ -33,6 +33,17 @@ Caveats:
 - **The wrapper changes only API-visible names.** Sort order stays on the translated title (`SortName`/`CleanName` are not touched), so an
   Arabic-titled movie sorts where its Latin name sorts.
 - **Webhook, Playback Reporting and Jellyseerr keep the translated title.** They read the item server-side, not through the wrapped DTO.
+- **Dashboard session cards, "now playing" and SyncPlay keep the translated title.** They build their DTOs without a user (ruling R10), and a
+  DTO without a user is never rewritten. So "in every client" means every client's browsing, search and detail screens, not these.
+- **Meilisearch.** When the installed Meilisearch search plugin returns any results, Jellyfin skips its own SQL search, and on some
+  servers it returns junk for Arabic queries on `/Search/Hints`. The plugin's provider is superset-safe (ruling R1: with a romanised hit it also
+  returns the SQL matches), but it cannot fix Meilisearch's junk. The remedy, trying `MatchingStrategy=all` and otherwise removing the
+  Meilisearch plugin, is a user step.
+- **Short search queries.** A query whose every key is shorter than 3 characters (for example `la` or `mo`) is not romanised: short keys match
+  only equal short keys, and a romanised hit would outrank the server's genuine prefix matches (ruling R15). Blind spot this creates: a
+  title whose every key is shorter than 3 characters (for example just `الباب`, which transliterates to `albab`, key `b`) cannot be reached by
+  any romanised query, because a short-only query is skipped and a 3+ character query key never matches a shorter title key. The server's
+  own search on the translated name still finds it.
 - Episode and season titles are never changed, only `SeriesName`.
 - Language codes are two-letter ISO 639-1 (`ar`, `fr`) as stored in `OriginalLanguage`; the settings page trims and lowercases.
 
@@ -59,7 +70,11 @@ It does **not** cover:
   repairs the swap;
 - **a false positive**: a user who has the language enabled and deliberately types the original title they are shown into `Name` (or
   `SeriesName`), without swapping `OriginalTitle`, is reverted, because that request looks exactly like the accidental save. With an API key
-  this applies when any configured user has the language. To store it on purpose, save from a user without that language;
+  this applies when any configured user has the language. To store it on purpose, save from an **administrator** account without that
+  language (`UpdateItem` requires elevation; an API-key save compares against every configured user);
+- **a swap that also edits the Latin title**: a deliberate swap where the admin ALSO changes the Latin title (the posted `OriginalTitle` then
+  differs from the stored `Name`) looks exactly like an `OriginalTitle` typo fix, so the guard restores `Name` and the Arabic title is lost
+  from both fields;
 - a Jellyfin upgrade that renames the controller or action (the guard then silently stops matching). A renamed `itemId`/`request` argument
   is detected and logged as an Error on every save. Re-run the harness check after each Jellyfin upgrade.
 
@@ -74,6 +89,10 @@ It does **not** cover:
 
 Clear the user's language list on the plugin page, or uninstall the plugin. The display layer never changes stored data, so there is nothing
 to clean up. The plugin never writes stored data itself: the editor guard only puts the stored value back into an incoming save request.
+
+**Recovery if Jellyfin does not start.** The `IDtoService` decorator builds core's `DtoService` the first time `IDtoService` is resolved, so a
+break there can stop Jellyfin from starting, and the web UI cannot then uninstall the plugin. Delete the plugin folder and restart: inside the
+container `/config/data/plugins/Original Titles_*`, or the matching folder in the config volume on the host.
 
 ## Local harness
 
@@ -172,7 +191,8 @@ episodes is the Arabic series title, episode `Name` is unchanged. Expected for t
 
 Editor guard (needs the **editor guard**): `pwsh scripts/harness/editor-guard.ps1` enables `ar` for `harness-admin` only, posts every displayed fixture item back
 unchanged (API key and admin session), reads the stored values through the control user and must end with `FAILS=0`. Run it after
-every Jellyfin upgrade: a renamed controller or action silently disables the guard.
+every Jellyfin upgrade: a renamed controller or action silently disables the guard. After an upgrade, first bump the harness image
+(`jellyfin/jellyfin:12.2` in `docker-compose.debug.yml`) to the live Jellyfin version, otherwise the script checks the old one.
 
 `GET /Items/{id}` returns 400 without a user, so always use `/Users/{uid}/Items/{id}`. In PowerShell send
 `@{Authorization = "MediaBrowser Token=`"$key`""}` and set `[Console]::OutputEncoding = [Text.Encoding]::UTF8`, otherwise Arabic prints as `?`.

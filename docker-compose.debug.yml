@@ -15,7 +15,7 @@
 # plugin dir BEFORE Jellyfin starts. Jellyfin cannot hot-load/replace a plugin, so every change = restart.
 #
 # Build the plugin first (`dotnet build`, or leave `dotnet watch build` running, see README). No metadata
-# providers are enabled by seed.ps1 and nothing in this stack contacts any server other than itself.
+# providers are enabled by seed.ps1 and no real library server is contacted.
 name: jf-original-titles
 
 services:
