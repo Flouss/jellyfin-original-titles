@@ -80,12 +80,15 @@ public class OriginalTitlesSearchProviderTests
         Assert.Same(query, Assert.Single(f.Sql.Queries)); // delegated with the caller's own filters (types, parent, user, limit)
     }
 
-    [Fact]
-    public async Task Security_UserWithoutAccess_GetsNoHit_CompanionWithAccessDoes()
+    [Theory]
+    [InlineData(BaseItemKind.Movie)]
+    [InlineData(BaseItemKind.Series)]
+    public async Task Security_UserWithoutAccess_GetsNoHit_CompanionWithAccessDoes(BaseItemKind kind)
     {
-        // Review Focus 6. Both users have Arabic enabled; only UserAr may see A1 (UserHidden: hidden library / parental block).
+        // Review Focus 6, for BOTH indexed kinds (review round 1: a Series-only access bypass survived the Movie-only version).
+        // Both users have Arabic enabled; only UserAr may see A1 (UserHidden: hidden library / parental block).
         var f = new Fixture();
-        f.AddVisible(Movie(IdA1), UserAr);
+        f.AddVisible(kind == BaseItemKind.Movie ? Movie(IdA1) : SeriesItem(IdA1), UserAr);
 
         Assert.Empty(await f.Search(Query(UserHidden)));
         Assert.Contains((UserHidden, IdA1), f.Access.Asked); // the access seam was consulted for that pair

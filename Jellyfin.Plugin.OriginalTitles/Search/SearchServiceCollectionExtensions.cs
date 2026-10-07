@@ -11,8 +11,9 @@ namespace Jellyfin.Plugin.OriginalTitles.Search;
 /// </summary>
 /// <remarks>
 /// The provider itself is NOT registered: the server finds it by type scan and builds it with <c>ActivatorUtilities</c>. Without these
-/// registrations that construction fails and the server's <c>CreateInstanceSafe</c> disables the WHOLE plugin (ApplicationHost v12.2
-/// ~340), so the registrator line is mandatory.
+/// registrations that construction fails: the provider is omitted this session; the plugin is persisted as Malfunctioned and not loaded
+/// from the next restart (CreateInstanceSafe -> FailPlugin; LocalPlugin.IsEnabledAndSupported). So the registrator line is mandatory
+/// (pinned by SearchRegistrationTests.RealRegistrator_LetsTheTypeScanCreateTheProvider).
 /// </remarks>
 public static class SearchServiceCollectionExtensions
 {
