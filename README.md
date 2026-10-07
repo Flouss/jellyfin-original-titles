@@ -45,7 +45,10 @@ Caveats:
   `hb`, `dar` -> `dr`). Blind spot this creates: a title whose every key is one character (for example a title that is just `ب`, or `الباب`,
   which transliterates to `albab`, key `b`) cannot be found by any romanised query. The server's own search still finds such a title by its
   translated name and, where core SQL search runs, by the original title. Note that an installed Meilisearch plugin suppresses the
-  SQL search for Arabic queries until the Meilisearch step above is done.
+  SQL search for Arabic queries until the Meilisearch step above is done. Accepted trade-off: queries with 2-character keys run and score 90, above SQL's prefix matches (80/75), so stopword-like words keyed to 2
+  characters in a non-Arabic enabled language (for example French `les` -> `ls`, `des` -> `ds`, `mon` -> `mn`) can return several same-key titles
+  above prefix matches; this is bounded, because the whole query must be covered and a 2-character key matches only an exactly equal key. Revisit
+  if seen in use.
 - Episode and season titles are never changed, only `SeriesName`.
 - Language codes are two-letter ISO 639-1 (`ar`, `fr`) as stored in `OriginalLanguage`; the settings page trims and lowercases.
 
@@ -77,6 +80,10 @@ It does **not** cover:
 - **a swap that also edits the Latin title**: a deliberate swap where the admin ALSO changes the Latin title (the posted `OriginalTitle` then
   differs from the stored `Name`) looks exactly like an `OriginalTitle` typo fix, so the guard restores `Name` and the Arabic title is lost
   from both fields;
+- **the stock web UI blanks an episode's stored `SeriesName` on save, with or without this plugin.** Observed on the Jellyfin 12.2.0 web UI
+  (harness browser check, reproduced for a user with no plugin entry): saving an episode in the metadata editor posts `SeriesName: ""` (the
+  field is only filled for Book items). The guard cannot catch it, because an empty string is not what the plugin displays. The series name is
+  re-derived the next time the series itself is saved or refreshed;
 - a Jellyfin upgrade that renames the controller or action (the guard then silently stops matching). A renamed `itemId`/`request` argument
   is detected and logged as an Error on every save. Re-run the harness check after each Jellyfin upgrade.
 

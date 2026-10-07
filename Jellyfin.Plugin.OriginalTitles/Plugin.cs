@@ -50,8 +50,8 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// Tripwire: a second, inline provider lambda that returns <c>new PluginConfiguration()</c> turns the plugin into a silent no-op for
     /// every user. Pinned by <c>ConfigurationProviderTests</c> (resolves <see cref="IUserLanguageSettings"/> through the real
     /// registrator and through the extension alone and checks it reads this method's result). Does NOT cover: a registration that
-    /// bypasses both of those entry points, and the <c>Instance?.Configuration</c> production branch itself: <see cref="Instance"/> cannot
-    /// be set in tests, so mutating that branch survives; the harness wrapper check is its only pin.
+    /// bypasses both of those entry points, and the <c>Instance?.Configuration</c> production branch itself: <see cref="Instance"/> is not set
+    /// in the unit tests (the setter is private; only the Plugin constructor sets it), so mutating that branch survives; the harness wrapper check is its only pin.
     /// </remarks>
     /// <returns>The live configuration, or an empty one when the plugin instance does not exist yet.</returns>
     internal static PluginConfiguration CurrentConfiguration()

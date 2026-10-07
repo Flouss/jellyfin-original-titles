@@ -176,7 +176,7 @@ public class SearchHintsFilter : IAsyncActionFilter
         {
             _logger.LogWarning(
                 ex,
-                "Original Titles: could not decide the search hint name for item {ItemId}; it is shown unchanged. Further {ExceptionType} failures are logged at Debug level only",
+                "Original Titles: could not decide the search hint name (item {ItemId}; an all-zero id means the failure was not tied to one item); it is shown unchanged. Further {ExceptionType} failures are logged at Debug level only",
                 itemId,
                 ex.GetType().Name);
         }
