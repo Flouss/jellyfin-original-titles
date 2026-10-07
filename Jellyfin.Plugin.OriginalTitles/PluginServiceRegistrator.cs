@@ -18,6 +18,12 @@ namespace Jellyfin.Plugin.OriginalTitles;
 /// (v12.2 ApplicationHost.cs ~490/492/606). The concrete DtoService is in Emby.Server.Implementations, which the plugin does not
 /// reference, so the decorator builds the original from the existing descriptor at resolve time. Must never throw:
 /// PluginManager.RegisterServices marks a throwing plugin Malfunctioned.
+/// The container resolves the LAST registration of a service, so a plugin that registers <c>IDtoService</c> after this one wins
+/// and the decorator is bypassed (this plugin wraps whatever is registered when it runs, not what comes later).
+/// The decorator is registered as a factory descriptor (it builds the wrapped service itself), so DI no longer checks that part of the
+/// graph for constructor cycles or missing dependencies at build time; a wrong wiring shows up when <c>IDtoService</c> is first resolved.
+/// <c>OriginalTitleDtoService.LogFailure</c> is called from inside its catch blocks and is not itself guarded: a logger that throws
+/// would escape (safe under Serilog, which never throws from a log call).
 /// </remarks>
 public class PluginServiceRegistrator : IPluginServiceRegistrator
 {
