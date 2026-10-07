@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.OriginalTitles.Library;
@@ -26,6 +28,10 @@ namespace Jellyfin.Plugin.OriginalTitles.Search;
 /// </remarks>
 public sealed class TitleIndex : IDisposable
 {
+    // Arabic beh: ICU Any-Latin gives "b", whose key is "b". Untransliterated it would key to the Arabic letter itself.
+    private const string WarmUpProbe = "ب";
+    private const int WarmUpAttempts = 5;
+
     private readonly ILibraryManager _libraryManager;
     private readonly LibraryItemEvents _events;
     private readonly ILogger<TitleIndex> _logger;
@@ -38,6 +44,7 @@ public sealed class TitleIndex : IDisposable
     private readonly object _buildGate = new();
     private volatile bool _built;
     private bool _disposed;
+    private int _nonLatinKeysLogged;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TitleIndex"/> class and starts listening to library events.
@@ -78,6 +85,7 @@ public sealed class TitleIndex : IDisposable
 
             try
             {
+                WarmUpTransliterator();
                 var snapshot = new List<TitleIndexEntry>();
                 var query = new InternalItemsQuery
                 {
@@ -166,7 +174,7 @@ public sealed class TitleIndex : IDisposable
         _events.ItemRemoved -= OnItemRemoved;
     }
 
-    private static TitleIndexEntry? EntryFor(BaseItem? item)
+    private TitleIndexEntry? EntryFor(BaseItem? item)
     {
         if (item is not (Movie or Series) || item.IsVirtualItem)
         {
@@ -185,7 +193,41 @@ public sealed class TitleIndex : IDisposable
             return null;
         }
 
+        // Tripwire (logs, never throws: the index fails open): a key that is not ASCII means ICU returned this title (partly)
+        // untransliterated, e.g. a first-call race with the server's own unlocked Transliterated() calls; the title then cannot
+        // match a Latin query until its next ItemUpdated. Does NOT detect a wrong-but-Latin transliteration.
+        if (keys.Any(k => !k.All(char.IsAscii)) && Interlocked.Increment(ref _nonLatinKeysLogged) == 1)
+        {
+            _logger.LogWarning(
+                "Original Titles: item {ItemId} produced non-Latin search keys; ICU may not have transliterated it (logged once)",
+                item.Id);
+        }
+
         return new TitleIndexEntry(item.Id, item is Movie ? BaseItemKind.Movie : BaseItemKind.Series, language, keys);
+    }
+
+    /// <summary>
+    /// Brings ICU past its first-call race before the bulk build (R9): RomanisationKey's lock serialises only the plugin's own calls,
+    /// while the server calls <c>Transliterated()</c> unlocked (sort names during scans, SQL search on non-Latin queries) at the same
+    /// startup moment. The race was measured as first-call only, so one correct probe result makes the rest of the build safe.
+    /// Not covered: a unit test cannot provoke the race; only a racing-thread probe or the live harness can show it.
+    /// </summary>
+    private void WarmUpTransliterator()
+    {
+        for (var attempt = 1; attempt <= WarmUpAttempts; attempt++)
+        {
+            var keys = RomanisationKey.TransliteratedKeysOf(WarmUpProbe);
+            if (keys.Count == 1 && keys[0] == "b")
+            {
+                return;
+            }
+
+            Thread.Sleep(20 * attempt);
+        }
+
+        _logger.LogWarning(
+            "Original Titles: ICU transliteration probe still failed after {Attempts} attempts; romanised search may miss titles",
+            WarmUpAttempts);
     }
 
     private void OnItemChanged(object? sender, ItemChangeEventArgs e)
