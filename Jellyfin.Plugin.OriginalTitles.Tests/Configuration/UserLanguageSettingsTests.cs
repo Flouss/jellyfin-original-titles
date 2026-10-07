@@ -105,6 +105,32 @@ public class UserLanguageSettingsTests
     }
 
     [Fact]
+    public void GetConfiguredUserIds_ListsEachConfiguredUserOnce_InConfigurationOrder()
+    {
+        // Entries Alice ["ar"], Bob [] (no languages, still configured), Alice ["fr"] (duplicate) -> distinct, first-seen order:
+        // [Alice, Bob]. Stranger has no entry and is absent (absence companion to the two presences).
+        var ids = Build((Alice, new[] { "ar" }), (Bob, Array.Empty<string>()), (Alice, new[] { "fr" })).GetConfiguredUserIds();
+
+        Assert.Equal(new[] { Alice, Bob }, ids);
+        Assert.DoesNotContain(Stranger, ids);
+    }
+
+    [Fact]
+    public void GetConfiguredUserIds_ThrowingNullOrMalformedConfiguration_IsEmpty_WhileValidSiblingEntryIsListed()
+    {
+        // Same failure modes as IsEnabled: a throwing provider, a null configuration, a null Users list -> empty, never a throw.
+        Assert.Empty(new UserLanguageSettings(() => throw new InvalidOperationException("config unavailable")).GetConfiguredUserIds());
+        Assert.Empty(new UserLanguageSettings(() => null!).GetConfiguredUserIds());
+        Assert.Empty(new UserLanguageSettings(() => new PluginConfiguration { Users = null! }).GetConfiguredUserIds());
+
+        // A null entry is skipped; Bob's valid entry after it is listed (presence companion).
+        var config = new PluginConfiguration();
+        config.Users.Add(null!);
+        config.Users.Add(new UserLanguageEntry { UserId = Bob, Languages = new List<string> { "ar" } });
+        Assert.Equal(new[] { Bob }, new UserLanguageSettings(() => config).GetConfiguredUserIds());
+    }
+
+    [Fact]
     public void IsEnabled_NullConfigNullUsersOrNullEntry_IsFalse_WhileValidSiblingEntryIsTrue()
     {
         // A null configuration, a null Users list, or a null entry inside Users (possible after XML deserialisation of a

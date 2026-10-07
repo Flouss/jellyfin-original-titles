@@ -32,6 +32,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<Api.SearchHintsFilter>();
         serviceCollection.Configure<Microsoft.AspNetCore.Mvc.MvcOptions>(options => options.Filters.AddService<Api.SearchHintsFilter>());
 
+        // Editor guard: keeps the stored Name/SeriesName when a metadata save posts back the displayed original title.
+        serviceCollection.Configure<Microsoft.AspNetCore.Mvc.MvcOptions>(options => options.Filters.Add<Guard.EditorGuardFilter>());
+
         // Search provider dependencies (library event relay, title index, ISearchProvider). Mandatory: without them the provider
         // cannot be constructed.
         serviceCollection.AddOriginalTitlesSearch();

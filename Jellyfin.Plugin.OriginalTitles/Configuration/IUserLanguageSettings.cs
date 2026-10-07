@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.OriginalTitles.Configuration;
 
@@ -15,4 +16,11 @@ public interface IUserLanguageSettings
     /// <param name="languageCode">The item's original language code, e.g. "ar".</param>
     /// <returns>True when the code is in the user's enabled list.</returns>
     bool IsEnabled(Guid userId, string? languageCode);
+
+    /// <summary>
+    /// Gets the distinct ids of every user that has a settings entry (whatever its languages). Never throws: an unreadable or
+    /// malformed configuration gives an empty list.
+    /// </summary>
+    /// <returns>The configured user ids, in configuration order.</returns>
+    IReadOnlyList<Guid> GetConfiguredUserIds();
 }

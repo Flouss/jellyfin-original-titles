@@ -29,20 +29,32 @@ Caveats:
 - Episode and season titles are never changed, only `SeriesName`.
 - Language codes are two-letter ISO 639-1 (`ar`, `fr`) as stored in `OriginalLanguage`; the settings page trims and lowercases.
 
-### Editor-guard blind spots
+### Editor guard and its blind spots
 
-When an admin saves an item in the metadata editor, a client may post the *swapped* name back. The editor guard restores the cached real
-`Name`. It does **not** cover:
+The metadata editor shows the wrapper's output, and `POST /Items/{id}` (v12.2 `ItemUpdateController.UpdateItem`) copies the posted `Name`
+into the item, cascades a series' `Name` into every season and episode `SeriesName`, and copies a posted episode/season `SeriesName`. Saving a
+displayed item unchanged would therefore store the original title (reproduced on the harness). The editor guard (`Guard/EditorGuardFilter.cs`,
+a global MVC action filter) runs **before** that action: when the posted `Name` (movie, series) or `SeriesName` (episode, season) equals what
+the plugin shows **any** configured user for that item, it puts the stored value back into the request. The controller's own write then keeps
+the real name. The guard itself never writes anything, so it cannot loop. Each kept value is logged at Information
+(`editor guard kept the stored ...`).
 
-- edits made while the plugin is disabled (nothing is cached or restored);
-- writers that bypass `ItemUpdated` (direct DB edits, scripts or plugins that persist without the event);
-- items whose translated `Name` equals the original title (nothing to restore, nothing to detect);
-- items first seen **already swapped** (no real `Name` was ever cached, so there is nothing to restore).
+It does **not** cover:
+
+- edits made while the plugin is disabled or uninstalled;
+- writers that bypass `POST /Items/{id}` (direct DB edits, scripts or plugins that persist items themselves, metadata refreshes);
+- items already stored swapped (stored `Name` equals the original title: nothing is displayed differently, nothing to restore);
+- items whose translated `Name` legitimately equals the original title;
+- **a false positive**: an admin who deliberately sets `Name` (or `SeriesName`) to the original title while any user has that language
+  enabled is reverted, because that request looks exactly like the accidental save. To store it on purpose, remove the language from every
+  user's list first, save, then add it back;
+- a Jellyfin upgrade that renames the controller or action (the guard then silently stops matching). A renamed `itemId`/`request` argument
+  is detected and logged as an Error on every save. Re-run the harness check after each Jellyfin upgrade.
 
 ### Switching it off
 
 Clear the user's language list on the plugin page, or uninstall the plugin. The display layer never changes stored data, so there is nothing
-to clean up. The only write the plugin ever makes is the guard restoring a previously cached real value.
+to clean up. The plugin never writes stored data itself: the editor guard only puts the stored value back into an incoming save request.
 
 ## Local harness
 
@@ -131,6 +143,10 @@ episodes is the Arabic series title, episode `Name` is unchanged. Expected for t
     curl -s -H "$H" "$B/Search/Hints?searchTerm=Mouch&userId=<uid>"
     # stored data must be unchanged: the same item through the control user
     curl -s -H "$H" "$B/Users/<controlUid>/Items/<movieId>"
+
+Editor guard: `pwsh scripts/harness/editor-guard.ps1` enables `ar` for `harness-admin` only, posts every displayed fixture item back
+unchanged (API key and admin session), reads the stored values through the control user and must end with `FAILS=0`. Run it after
+every Jellyfin upgrade: a renamed controller or action silently disables the guard.
 
 `GET /Items/{id}` returns 400 without a user, so always use `/Users/{uid}/Items/{id}`. In PowerShell send
 `@{Authorization = "MediaBrowser Token=`"$key`""}` and set `[Console]::OutputEncoding = [Text.Encoding]::UTF8`, otherwise Arabic prints as `?`.

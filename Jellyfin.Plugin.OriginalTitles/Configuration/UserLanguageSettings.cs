@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.OriginalTitles.Configuration;
 
@@ -63,6 +64,33 @@ public class UserLanguageSettings : IUserLanguageSettings
         }
 
         return false;
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<Guid> GetConfiguredUserIds()
+    {
+        PluginConfiguration? config;
+        try
+        {
+            config = _configProvider();
+        }
+#pragma warning disable CA1031 // An unreadable configuration means nobody is configured; never break the caller.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            return Array.Empty<Guid>();
+        }
+
+        var ids = new List<Guid>();
+        foreach (var entry in config?.Users ?? new List<UserLanguageEntry>())
+        {
+            if (entry is not null && !ids.Contains(entry.UserId))
+            {
+                ids.Add(entry.UserId);
+            }
+        }
+
+        return ids;
     }
 
     // Settings keep whatever the admin typed; BaseItem.OriginalLanguage keeps raw values when no LocalizationManager exists.
