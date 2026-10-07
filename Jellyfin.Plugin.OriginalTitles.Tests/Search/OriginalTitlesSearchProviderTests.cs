@@ -181,35 +181,81 @@ public class OriginalTitlesSearchProviderTests
         Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr)));
     }
 
+    // Extra fixture titles for the single-character-key rule (ruling R16). Keys derived by hand with the RomanisationKey rules
+    // (lowercase, digraphs sh/ch/th..., drop a/e/i/o/u and non-initial w/y, collapse doubles):
+    //   موش في ثنيتي -> ICU "mwsh fy thnyty" (docs/spike.md) -> mwsh: sh->c "mwc", drop w -> "mc"; fy -> "f"; thnyty: th->t "tnyty", drop y -> "tnt"
+    //                   => [mc, f, tnt]   (pinned in RomanisationKeyTests / TitleIndexTests)
+    //   "Mo Dar"     -> Latin passes ICU unchanged, lower-cased "mo dar" -> mo: drop o -> "m"; dar: drop a -> "dr"   => [m, dr]
+    //   "Habibi"     -> "habibi" -> drop a,i,i -> "hbb" -> collapse -> "hb"                                          => [hb]
+    // Together with the Khattab title ([xtb, l, b]) this gives a title for every key length the rule distinguishes.
+    private const string MouchTitle = "موش في ثنيتي";
+    private static readonly Guid IdMouch = new("ffffffff-0000-0000-0000-000000000001");
+    private static readonly Guid IdModar = new("ffffffff-0000-0000-0000-000000000002");
+    private static readonly Guid IdHabibi = new("ffffffff-0000-0000-0000-000000000003");
+
+    private static Fixture ShortKeyFixture()
+    {
+        var f = new Fixture();
+        f.AddVisible(Movie(IdA1), UserAr);
+        f.AddVisible(new Movie { Id = IdMouch, Name = "Mouch Fi Thniti", OriginalTitle = MouchTitle, OriginalLanguage = "ar" }, UserAr);
+        f.AddVisible(new Movie { Id = IdModar, Name = "The House", OriginalTitle = "Mo Dar", OriginalLanguage = "ar" }, UserAr);
+        f.AddVisible(new Movie { Id = IdHabibi, Name = "My Dear", OriginalTitle = "Habibi", OriginalLanguage = "ar" }, UserAr);
+        return f;
+    }
+
     [Theory]
     [InlineData("la")]
     [InlineData("le")]
     [InlineData("ba")]
     [InlineData("bab")]
     [InlineData("la ba")]
-    public async Task QueryWhoseKeysAreAllShorterThanThree_IsNotRomanised_AndDoesNotDelegate(string term)
+    [InlineData("mo")]
+    [InlineData("mou")]
+    public async Task QueryWhoseKeysAreAllSingleCharacters_IsNotRomanised_AndDoesNotDelegate(string term)
     {
-        // Short keys are exact-match only (TitleMatcher), and a romanised hit scores 90, above SQL's prefix tiers (80/75): a short query
-        // like "la" would otherwise return every title with a word keyed "l", ranked above genuine prefix matches. So when EVERY query key
-        // has fewer than 3 characters the provider does nothing and the manager's own SQL results stand.
-        // Keys by hand (RomanisationKey rules: lowercase, no article, digraphs, drop a/e/i/o/u, collapse doubles):
-        //   la -> drop a -> "l"      le -> drop e -> "l"      ba -> drop a -> "b"      bab -> drop a -> "bb" -> collapse -> "b"
-        //   "la ba" -> ["l", "b"]    all lengths 1 < 3
-        // The fixture title الخطاب على الباب has keys [xtb, l, b], so WITHOUT the guard each of these equals a title key and matches.
-        var f = new Fixture();
-        f.AddVisible(Movie(IdA1), UserAr);
+        // Ruling R16 (supersedes R15's "under 3"): a 1-character key matches every title that has a word with that key, and a romanised
+        // hit (90) would outrank SQL's genuine prefix matches (80/75), so the provider does nothing when EVERY query key has 1 character.
+        // Keys by hand: la -> drop a -> "l"; le -> drop e -> "l"; ba -> "b"; bab -> drop a -> "bb" -> collapse -> "b";
+        // "la ba" -> [l, b]; mo -> drop o -> "m"; mou -> drop o,u -> "m". All 1 character.
+        // Without the guard each would hit: l/b equal Khattab keys [xtb, l, b]; m equals the key of "Mo Dar" ([m, dr]).
+        var f = ShortKeyFixture();
         f.Sql.Results.Add(new SearchResult(IdB, 50f));
 
         Assert.Empty(await f.Search(Query(UserAr, term)));
         Assert.Empty(f.Sql.Queries);
 
-        // Presence companions on the same fixture: a query with at least one 3+ character key still matches (and delegates).
-        //   khottab           -> kh to x, drop o,a, collapse tt: "xtb"                    (one key, 3 characters)
-        //   khottab al beb    -> [xtb, b]  (al is a stopword; beb -> drop e -> "bb" -> "b"): xtb has 3 characters
-        //   la khottab        -> [l, xtb]  both are title keys                           (a short key riding with a long one)
-        Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr, "khottab")));
-        Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr)));
-        Assert.Equal(new[] { (IdA1, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr, "la khottab")));
+        // Presence companion on the same fixture: "dar" -> drop a -> "dr" (2 characters) is NOT skipped and finds "Mo Dar".
+        Assert.Equal(new[] { (IdModar, Romanised), (IdB, 50f) }, await f.Search(Query(UserAr, "dar")));
+    }
+
+    [Theory]
+    [InlineData("mouch")]
+    [InlineData("dar")]
+    [InlineData("7bibi")]
+    [InlineData("khottab")]
+    [InlineData("khottab al beb")]
+    [InlineData("la khottab")]
+    public async Task QueryWithAKeyOfTwoOrMoreCharacters_IsRomanised_AndDelegates(string term)
+    {
+        // Keys by hand (see the fixture comment above for the titles):
+        //   mouch          -> ch->c "mouc" -> drop o,u -> "mc"      (2 chars)  == key of موش في ثنيتي            -> IdMouch
+        //   dar            -> drop a -> "dr"                         (2 chars)  == key of "Mo Dar"               -> IdModar
+        //   7bibi          -> 7->h "hbibi" -> drop i,i -> "hbb" -> "hb" (2)    == key of "Habibi"               -> IdHabibi
+        //   khottab        -> kh->x "xottab" -> drop o,a -> "xttb" -> collapse -> "xtb" (3) == Khattab key       -> IdA1
+        //   khottab al beb -> [xtb, b] (al is a stopword; beb -> "bb" -> "b"); one key has 3 chars               -> IdA1
+        //   la khottab     -> [l, xtb]; xtb has 3 chars, and both keys are Khattab keys                           -> IdA1
+        // 2-character keys match only an equal 2-character key (no edit distance below 3), so each query hits exactly its own title.
+        var expected = term switch
+        {
+            "mouch" => IdMouch,
+            "dar" => IdModar,
+            "7bibi" => IdHabibi,
+            _ => IdA1,
+        };
+        var f = ShortKeyFixture();
+
+        Assert.Equal(new[] { (expected, Romanised) }, await f.Search(Query(UserAr, term)));
+        Assert.Single(f.Sql.Queries);
     }
 
     [Fact]

@@ -22,11 +22,11 @@ public interface IUserLanguageSettings
     /// malformed configuration gives an empty list.
     /// </summary>
     /// <remarks>
-    /// Tripwire: callers that are NOT inside a try/catch rely on the never-throws contract above, so an implementation that can throw
-    /// breaks them: <c>Api/SearchHintsFilter</c> (the user-has-an-entry short-circuit in <c>OnActionExecutionAsync</c>, after the action
-    /// ran: a throw would fail the whole /Search/Hints response) and <c>OriginalTitlesSearchProvider.CanSearch</c> (which has its own
-    /// try/catch since the manager calls it outside any try, but still declines on a throw). The guard (<c>EditorGuardFilter</c>) and the
-    /// DTO wrapper (<c>OriginalTitleDtoService</c>, through <c>DisplayNameResolver.HasSettingsEntry</c>) call it inside a try. Does NOT cover: a new caller added later; check its own failure handling.
+    /// Tripwire: the one caller that is NOT inside a try/catch relies on the never-throws contract above, so an implementation that can
+    /// throw breaks it: <c>Api/SearchHintsFilter</c> (the user-has-an-entry short-circuit in <c>OnActionExecutionAsync</c>, after the
+    /// action ran: a throw would fail the whole /Search/Hints response). Every other caller guards itself and fails open:
+    /// <c>OriginalTitlesSearchProvider.CanSearch</c> (own try/catch, declines on a throw; the manager calls it outside any try),
+    /// <c>EditorGuardFilter</c> and the DTO wrapper (<c>OriginalTitleDtoService</c>, through <c>DisplayNameResolver.HasSettingsEntry</c>). Does NOT cover: a new caller added later; check its own failure handling.
     /// </remarks>
     /// <returns>The configured user ids, in configuration order.</returns>
     IReadOnlyList<Guid> GetConfiguredUserIds();
