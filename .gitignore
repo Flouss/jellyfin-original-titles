@@ -1,0 +1,29 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+TestResults/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Build artifacts
+*.dll
+*.pdb
+*.zip
+
+# Secrets and local config (never commit)
+.env
+*.key
+*.pem
+appsettings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
