@@ -83,6 +83,29 @@ public class RomanisationKeyTests
         Assert.Equal(expected, RomanisationKey.KeyOf(word));
     }
 
+    [Fact]
+    public void KeyOf_DigitsRunBeforeDigraphs_SoAnArabiziDigitFusesWithAPrecedingLetter()
+    {
+        // Documented limitation (README, Known limitations): MapDigits runs before MergeDigraphs, so a digit that maps to "h" or
+        // "kh" can complete a digraph with the letter before it.
+        //   s7 -> 7 to h: "sh" -> digraph sh to c: "c"        == KeyOf("sh") (= "c"): Arabizi s + 7 (two letters) collides with sh
+        //   t7 -> "th" -> digraph th to t: "t"                == KeyOf("th") (= "t") == KeyOf("t"): the 7 is swallowed
+        //   k5 -> 5 to kh: "k" + "kh" = "kkh" -> i0 "kk" is no digraph, i1 "kh" to x: "kx" == KeyOf("kkh") (= "kx")
+        Assert.Equal("c", RomanisationKey.KeyOf("s7"));
+        Assert.Equal(RomanisationKey.KeyOf("sh"), RomanisationKey.KeyOf("s7"));
+        Assert.Equal("t", RomanisationKey.KeyOf("t7"));
+        Assert.Equal(RomanisationKey.KeyOf("th"), RomanisationKey.KeyOf("t7"));
+        Assert.Equal(RomanisationKey.KeyOf("t"), RomanisationKey.KeyOf("t7"));
+        Assert.Equal("kx", RomanisationKey.KeyOf("k5"));
+        Assert.Equal(RomanisationKey.KeyOf("kkh"), RomanisationKey.KeyOf("k5"));
+
+        // Presence companions (no fusion when something sits between the letter and the digit, or the digit comes first):
+        //   sa7 -> "sah": s,a and a,h are no digraphs -> drop a: "sh" (the letters stay apart; NOT "c")
+        //   7s  -> "hs": no digraph "hs" -> "hs"
+        Assert.Equal("sh", RomanisationKey.KeyOf("sa7"));
+        Assert.Equal("hs", RomanisationKey.KeyOf("7s"));
+    }
+
     [Theory]
 
     // shams -> sh to c: cams -> drop a: cms ; chams -> same

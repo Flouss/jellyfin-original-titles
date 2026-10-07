@@ -51,6 +51,13 @@ It does **not** cover:
 - a Jellyfin upgrade that renames the controller or action (the guard then silently stops matching). A renamed `itemId`/`request` argument
   is detected and logged as an Error on every save. Re-run the harness check after each Jellyfin upgrade.
 
+### Known limitations
+
+- **Search keys, Arabizi digits before digraphs.** The romanisation key maps the digits first (`7` to `h`, `5` to `kh`) and merges digraphs
+  after, so a digit can fuse with the letter before it: `s7` becomes `sh` (key `c`, the same as `sh`), `t7` becomes `th` (key `t`, the 7 is
+  lost) and `k5` becomes `kkh` (key `kx`, the same as `kkh`). Searching with such a spelling can therefore also match titles that contain the
+  plain digraph. Pinned by `KeyOf_DigitsRunBeforeDigraphs_SoAnArabiziDigitFusesWithAPrecedingLetter`.
+
 ### Switching it off
 
 Clear the user's language list on the plugin page, or uninstall the plugin. The display layer never changes stored data, so there is nothing
