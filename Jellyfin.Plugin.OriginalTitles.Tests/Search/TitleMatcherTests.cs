@@ -67,6 +67,13 @@ public class TitleMatcherTests
     [InlineData("xt", "xtb", true)]
     [InlineData("xtb", "xt", false)]
 
+    // prefix rule limits: a 1-char query key is never a prefix (R16), the prefix must start at the beginning of the title key,
+    // and the title key must be strictly longer (equality is the old rule)
+    [InlineData("x", "xt", false)]
+    [InlineData("tb", "xtb", false)]
+    [InlineData("cf", "cfl", true)]
+    [InlineData("cf", "cf", true)]
+
     // companion: 3-char vs 3-char at distance 1 matches (substitution), and 3 vs 4 (insertion / deletion)
     [InlineData("xtb", "xtp", true)]
     [InlineData("xtb", "xtbb", true)]
@@ -83,6 +90,22 @@ public class TitleMatcherTests
     public void WordsMatch_ShortKeysNeedExactEquality(string queryKey, string titleKey, bool expected)
     {
         Assert.Equal(expected, TitleMatcher.WordsMatch(queryKey, titleKey));
+    }
+
+    [Fact]
+    public void Prefix_ShoufFindsChoufliHal_ThroughTheRealTransliterator()
+    {
+        // Real-world titles: "شوفلي حل" -> ICU shwfly hl -> keys [cfl, hl]; "سبق الخير" -> [sbq, xr].
+        // Queries: shouf and chouf both -> sh/ch = c, vowels dropped -> [cf]; cf is a prefix of cfl.
+        var choufli = RomanisationKey.TransliteratedKeysOf("شوفلي حل");
+        var sabak = RomanisationKey.TransliteratedKeysOf("سبق الخير");
+        Assert.Equal(new[] { "cfl", "hl" }, choufli);
+
+        Assert.True(TitleMatcher.IsMatch(RomanisationKey.KeysOf("shouf"), choufli));
+        Assert.True(TitleMatcher.IsMatch(RomanisationKey.KeysOf("chouf"), choufli));
+
+        // absence companion: the same query must not find an unrelated title
+        Assert.False(TitleMatcher.IsMatch(RomanisationKey.KeysOf("shouf"), sabak));
     }
 
     [Fact]

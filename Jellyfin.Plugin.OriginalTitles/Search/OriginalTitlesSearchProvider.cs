@@ -59,7 +59,7 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
 
     /// <summary>
     /// The romanised path runs only when at least one query key has this many characters (ruling R16, superseding R15's 3): only
-    /// single-character keys are skipped; 2+ character keys are exact-match only and specific enough.
+    /// single-character keys are skipped; 2+ character keys match an equal or prefixed title key and are specific enough.
     /// </summary>
     private const int MinRomanisedQueryKeyLength = 2;
 
@@ -243,7 +243,7 @@ public class OriginalTitlesSearchProvider : IExternalSearchProvider
 
         // A 1-character key is the flood case (R16): it equals every title word with that key, and a romanised hit outscores SQL's
         // prefix tiers, so a query whose keys are ALL shorter than this ("la", "mo", "bab") would list every such title above its genuine
-        // prefix matches. Keys of 2+ characters are exact-match only (TitleMatcher), hence specific. Decided here, not in
+        // prefix matches. Keys of 2+ characters match an equal or prefixed title key only (TitleMatcher), hence specific. Decided here, not in
         // TitleMatcher/RomanisationKey, so their unit semantics (a short key still matches an equal short key) stay intact.
         if (!queryKeys.Any(key => key.Length >= MinRomanisedQueryKeyLength))
         {

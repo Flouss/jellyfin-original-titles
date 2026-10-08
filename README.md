@@ -41,13 +41,13 @@ Caveats:
   Meilisearch plugin, is a user step.
 - **Single-character search keys (ruling R16).** A query whose every romanised key is a SINGLE character is not romanised: `mo`, `mou`, `le`,
   `la`, `ba`, `bab`, `la ba`, and Arabic-script one-consonant words. A 1-character key equals every title word with that key, and a romanised
-  hit would outrank the server's genuine prefix matches. Keys of 2+ characters are exact-match only and do run (`mouch` -> `mc`, `7bibi` ->
+  hit would outrank the server's genuine prefix matches. Keys of 2+ characters do run, and match an equal title key or a longer one they start with (`shouf` -> `cf` finds `choufli` -> `cfl`) (`mouch` -> `mc`, `7bibi` ->
   `hb`, `dar` -> `dr`). Blind spot this creates: a title whose every key is one character (for example a title that is just `ب`, or `الباب`,
   which transliterates to `albab`, key `b`) cannot be found by any romanised query. The server's own search still finds such a title by its
   translated name and, where core SQL search runs, by the original title. Note that an installed Meilisearch plugin suppresses the
   SQL search for Arabic queries until the Meilisearch step above is done. Accepted trade-off: queries with 2-character keys run and score 90, above SQL's prefix matches (80/75), so stopword-like words keyed to 2
   characters in a non-Arabic enabled language (for example French `les` -> `ls`, `des` -> `ds`, `mon` -> `mn`) can return several same-key titles
-  above prefix matches; this is bounded, because the whole query must be covered and a 2-character key matches only an exactly equal key. Revisit
+  above prefix matches; this is bounded, because the whole query must be covered and a 2-character key matches only an equal title key or one it prefixes (prefix rule, experimental: widens matches, revert `TitleMatcher.WordsMatch`'s prefix branch if it floods results). Revisit
   if seen in use.
 - Episode and season titles are never changed, only `SeriesName`.
 - Language codes are two-letter ISO 639-1 (`ar`, `fr`) as stored in `OriginalLanguage`; the settings page trims and lowercases.
