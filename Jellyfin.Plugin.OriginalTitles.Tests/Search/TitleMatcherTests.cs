@@ -63,8 +63,8 @@ public class TitleMatcherTests
     [InlineData("ab", "ab", true)]
     [InlineData("ab", "ac", false)]
 
-    // boundary: 2-char vs 3-char at distance 1 must NOT match (either direction)
-    [InlineData("xt", "xtb", false)]
+    // boundary: a 2-char query key is a PREFIX of a longer title key (prefix rule, was exact-only); the reverse never matches
+    [InlineData("xt", "xtb", true)]
     [InlineData("xtb", "xt", false)]
 
     // companion: 3-char vs 3-char at distance 1 matches (substitution), and 3 vs 4 (insertion / deletion)
