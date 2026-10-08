@@ -48,7 +48,9 @@ Caveats:
   SQL search for Arabic queries until the Meilisearch step above is done. Accepted trade-off: queries with 2-character keys run and score 90, above SQL's prefix matches (80/75), so stopword-like words keyed to 2
   characters in a non-Arabic enabled language (for example French `les` -> `ls`, `des` -> `ds`, `mon` -> `mn`) can return several same-key titles
   above prefix matches; this is bounded, because the whole query must be covered and a 2-character key matches only an equal title key or one it prefixes (prefix rule, experimental: widens matches, revert `TitleMatcher.WordsMatch`'s prefix branch if it floods results). Revisit
-  if seen in use.
+  if seen in use. Seen in use (2026-10-08): the French series "Astérix & Obélix : Le Combat des chefs" (`chefs` -> `cfs`) is returned for
+  `shouf` (`cf`, a prefix of `cfs`) next to Choufli Hal; the key drops vowels, so `chouf` and `chef` cannot be told apart. Accepted for now.
+  The fix, if it gets annoying: index only original titles that are not in Latin script (`TitleIndex.EntryFor`).
 - Episode and season titles are never changed, only `SeriesName`.
 - Language codes are two-letter ISO 639-1 (`ar`, `fr`) as stored in `OriginalLanguage`; the settings page trims and lowercases.
 
